@@ -1,0 +1,107 @@
+exchange:
+  name: "binance"
+  testnet: true
+
+pairs:
+  - symbol_a: "BTC/USDT:USDT"
+    symbol_b: "XRP/USDT:USDT"
+    hedge_ratio: 1.32
+    enabled: true
+
+scalping:
+  enabled: true
+  pairs:
+    - symbol: "BTC/USDT:USDT"
+      enabled: true
+    - symbol: "ETH/USDT:USDT"
+      enabled: true
+  timeframe: "1m"
+  deposit_usdt: 50
+  risk_per_trade_pct: 20
+  max_positions: 2
+  entry:
+    ema_period: 9
+    volume_multiplier: 1.2
+    min_candles: 2
+    volume_lookback: 10
+  exit:
+    take_profit_pct: 0.6
+    stop_loss_pct: 0.5
+    max_hold_minutes: 3
+  filters:
+    no_trade_hours: [0, 1]
+    min_volume_usdt: 1000000
+  ohlcv_backtest: "binance"
+
+strategy:
+  mode: "scalping"
+  timeframe: "15m"
+  lookback_periods: 60
+  entry_zscore: 1.5
+  exit_zscore: 0.3
+  stop_zscore: 3.0
+
+breakout:
+  enabled: false
+  exchange: "binance"
+  testnet: true
+  dry_run: true
+  pairs:
+    - symbol: "ETH/USDT:USDT"
+      enabled: false
+  timeframe: "1h"
+  lookback_candles: 20
+  volume_multiplier: 1.2
+  exit:
+    take_profit_pct: 4.0
+    stop_loss_pct: 2.0
+  risk:
+    balance_usdt: 1000
+    position_size_pct: 15
+    max_open_positions: 2
+    leverage: 3
+    max_daily_loss_pct: 5.0
+  bot:
+    loop_interval_sec: 60
+
+ema_scalper:
+  enabled: false
+  exchange: "binance"
+  testnet: true
+  dry_run: true
+  pairs:
+    - symbol: "ETH/USDT:USDT"
+      enabled: false
+  timeframe: "5m"
+  entry:
+    ema_period: 9
+    volume_lookback: 10
+    volume_multiplier: 1.2
+    min_candles_above_below: 2
+    no_trade_hours_utc: [2, 3, 4]
+    min_volume_usdt: 500000
+    cooldown_candles: 2
+  exit:
+    take_profit_pct: 1.5
+    stop_loss_pct: 0.5
+    max_hold_candles: 12
+    ema_cross_exit: true
+  risk:
+    balance_usdt: 50
+    position_size_pct: 25
+    max_open_positions: 2
+    leverage: 5
+    max_daily_loss_pct: 5.0
+  bot:
+    loop_interval_sec: 10
+
+risk:
+  leverage: 2
+  max_daily_loss_pct: 10
+  max_total_exposure: 2000
+  commission_pct: 0.1
+  max_position_usdt: 500
+
+bot:
+  loop_interval_sec: 10
+  dry_run: true

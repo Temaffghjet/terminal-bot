@@ -1,0 +1,23 @@
+{
+  "data_source": "binance_usdtm",
+  "ohlcv_backtest": "binance",
+  "period": {
+    "since": "2026-03-01",
+    "until": "2026-03-10"
+  },
+  "timeframe": "5m",
+  "symbols": [
+    "BTC/USDT:USDT",
+    "ETH/USDT:USDT"
+  ],
+  "trades_closed": 429,
+  "win_rate_pct": 17.72,
+  "total_net_usdt": -13.1276,
+  "total_gross_usdt": -0.2576,
+  "total_fees_usdt": 12.87,
+  "cost_rate_pct": 0.3,
+  "expectancy_usdt": -0.0306,
+  "avg_trade_min": 30.73,
+  "compute_sec": 3.94,
+  "exchange_config": "binance"
+}

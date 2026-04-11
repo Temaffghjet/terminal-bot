@@ -1,0 +1,47 @@
+# Боевой конфиг — только после тестов; testnet: false осознанно
+exchange:
+  name: "binance"
+  testnet: false
+
+pairs:
+  - symbol_a: "BTC/USDT:USDT"
+    symbol_b: "ETH/USDT:USDT"
+    hedge_ratio: 0.95
+    enabled: true
+  - symbol_a: "BTC/USDT:USDT"
+    symbol_b: "XRP/USDT:USDT"
+    hedge_ratio: 1.32
+    enabled: true
+  - symbol_a: "ETH/USDT:USDT"
+    symbol_b: "SOL/USDT:USDT"
+    hedge_ratio: 1.05
+    enabled: false
+
+strategy:
+  mode: "pairs"
+  timeframe: "15m"
+  lookback_periods: 60
+  entry_zscore: 1.8
+  exit_zscore: 0.4
+  stop_zscore: 2.8
+
+risk:
+  max_position_usdt: 200
+  max_total_exposure: 600
+  max_daily_loss_pct: 2.5
+  leverage: 3
+  commission_pct: 0.1
+
+scalping:
+  enabled: false
+  pairs: []
+
+breakout:
+  enabled: false
+
+ema_scalper:
+  enabled: false
+
+bot:
+  loop_interval_sec: 30
+  dry_run: false
