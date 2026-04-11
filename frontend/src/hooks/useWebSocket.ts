@@ -2,10 +2,25 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 export type BotState = Record<string, unknown> | null;
 
-/** Полный URL WebSocket (для Vercel / удалённого бэкенда), например wss://api.example.com/ws */
-const WS_URL =
-  import.meta.env.VITE_WS_URL?.trim() ||
-  `ws://localhost:${import.meta.env.VITE_WS_PORT ?? "8765"}`;
+const DEFAULT_PORT = import.meta.env.VITE_WS_PORT ?? "8765";
+
+/** ws:// / wss:// только; http(s) → ws(s) чтобы не падал new WebSocket при ошибке в Vercel env */
+function resolveWsUrl(): string {
+  const raw = import.meta.env.VITE_WS_URL?.trim();
+  if (!raw) {
+    return `ws://localhost:${DEFAULT_PORT}`;
+  }
+  if (raw.startsWith("ws://") || raw.startsWith("wss://")) {
+    return raw;
+  }
+  if (raw.startsWith("https://")) {
+    return `wss://${raw.slice("https://".length)}`;
+  }
+  if (raw.startsWith("http://")) {
+    return `ws://${raw.slice("http://".length)}`;
+  }
+  return raw;
+}
 
 export function useWebSocket() {
   const [state, setState] = useState<BotState>(null);
@@ -16,7 +31,18 @@ export function useWebSocket() {
 
   const connect = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
-    const ws = new WebSocket(WS_URL);
+    const url = resolveWsUrl();
+    let ws: WebSocket;
+    try {
+      ws = new WebSocket(url);
+    } catch {
+      console.error(
+        "[WS] Неверный VITE_WS_URL. Нужен ws:// или wss:// на бота (порт",
+        DEFAULT_PORT,
+        "), не http://localhost:5173"
+      );
+      return;
+    }
     wsRef.current = ws;
 
     ws.onopen = () => {
