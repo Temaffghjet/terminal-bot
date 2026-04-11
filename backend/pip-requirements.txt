@@ -1,0 +1,10 @@
+# Установка: pip install -r backend/pip-requirements.txt
+# Имя файла намеренно не requirements.txt — иначе Vercel пытается собрать Python.
+ccxt>=4.2.0
+websockets>=12.0
+pandas>=2.0
+numpy>=1.26
+statsmodels>=0.14
+aiohttp
+pyyaml
+python-dotenv
