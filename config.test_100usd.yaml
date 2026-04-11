@@ -5,8 +5,8 @@ exchange:
 
 pairs:
   - symbol_a: "BTC/USDC:USDC"
-    symbol_b: "XRP/USDC:USDC"
-    hedge_ratio: 1.32
+    symbol_b: "ETH/USDC:USDC"
+    hedge_ratio: 0.95
     enabled: true
 
 strategy:

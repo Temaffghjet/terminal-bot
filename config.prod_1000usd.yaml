@@ -9,7 +9,7 @@ pairs:
     hedge_ratio: 0.95
     enabled: true
   - symbol_a: "BTC/USDC:USDC"
-    symbol_b: "XRP/USDC:USDC"
+    symbol_b: "SOL/USDC:USDC"
     hedge_ratio: 1.32
     enabled: true
   - symbol_a: "ETH/USDC:USDC"

@@ -10,21 +10,16 @@ exchange:
   testnet: true
 
 # --- Stat-Arb (спред, z-score) — strategy.mode: "pairs" ----------------------------
+# На Hyperliquid нет XRP/BNB перпов в ccxt — используем BTC/ETH/SOL (проверка: load_markets()).
 pairs:
-  - symbol_a: "BTC/USDC:USDC"
-    symbol_b: "XRP/USDC:USDC"
-    hedge_ratio: 1.32
-    enabled: true
-
-  - symbol_a: "ETH/USDC:USDC"
-    symbol_b: "BNB/USDC:USDC"
-    hedge_ratio: 1.1
-    enabled: false
-
-  # Как в §8 config.prod — включить позже
   - symbol_a: "BTC/USDC:USDC"
     symbol_b: "ETH/USDC:USDC"
     hedge_ratio: 0.95
+    enabled: true
+
+  - symbol_a: "BTC/USDC:USDC"
+    symbol_b: "SOL/USDC:USDC"
+    hedge_ratio: 1.32
     enabled: false
 
   - symbol_a: "ETH/USDC:USDC"
