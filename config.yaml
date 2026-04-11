@@ -1,34 +1,33 @@
 # =============================================================================
-# Trading Bot — конфиг под спецификацию Cursor AI (§1–12), только Hyperliquid.
-# Ключи: HYPERLIQUID_WALLET_ADDRESS + HYPERLIQUID_PRIVATE_KEY в .env
-# Режимы UI: testnet → жёлтый баннер; dry_run → синий; оба false → красный LIVE.
+# Микроскальп EMA (§12 спецификации) на Hyperliquid, плечо x5, TF 5m.
+# Stat-arb (pairs) выключен — крутится только ema_scalper_loop.
+# Ключи: HYPERLIQUID_* в .env
 # =============================================================================
 
 exchange:
   name: "hyperliquid"
-  # §3 / §9: на старте лучше testnet; mainnet + реальная маржа → false
-  testnet: true
+  # mainnet + реальная маржа → false; тестнет HL → true
+  testnet: false
 
-# --- Stat-Arb (спред, z-score) — strategy.mode: "pairs" ----------------------------
-# На Hyperliquid нет XRP/BNB перпов в ccxt — используем BTC/ETH/SOL (проверка: load_markets()).
+# Stat-arb — не используется (все пары off), оставлено для быстрого переключения
 pairs:
   - symbol_a: "BTC/USDC:USDC"
     symbol_b: "ETH/USDC:USDC"
     hedge_ratio: 0.95
-    enabled: true
-
+    enabled: false
   - symbol_a: "BTC/USDC:USDC"
     symbol_b: "SOL/USDC:USDC"
     hedge_ratio: 1.32
     enabled: false
-
   - symbol_a: "ETH/USDC:USDC"
     symbol_b: "SOL/USDC:USDC"
     hedge_ratio: 1.05
     enabled: false
 
+# Режим "scalping" + scalping.enabled=false → не запускается scalping_bot_loop,
+# только ema_scalper (см. run_all_loops в main.py)
 strategy:
-  mode: "pairs" # "pairs" = stat-arb | "scalping" = микроскальп по scalping.*
+  mode: "scalping"
   timeframe: "15m"
   lookback_periods: 60
   entry_zscore: 1.5
@@ -42,7 +41,7 @@ risk:
   leverage: 5
   commission_pct: 0.1
 
-# Микроскальп (отдельный режим; выкл. пока работает stat-arb)
+# Старый цикл scalping.* (1m) — выкл.; используем ema_scalper ниже
 scalping:
   enabled: false
   pairs:
@@ -68,15 +67,14 @@ scalping:
     min_volume_usdt: 1000000
   ohlcv_backtest: "hyperliquid"
 
-# --- §11 Breakout 1H (опционально, параллельный цикл) -----------------------------
 breakout:
   enabled: false
   exchange: "hyperliquid"
-  testnet: true
+  testnet: false
   dry_run: true
   pairs:
     - symbol: "ETH/USDC:USDC"
-      enabled: true
+      enabled: false
     - symbol: "BTC/USDC:USDC"
       enabled: false
   timeframe: "1h"
@@ -96,17 +94,17 @@ breakout:
   bot:
     loop_interval_sec: 60
 
-# --- §12 EMA Micro-Scalper 5m (опционально; «primary» для малых депозитов) --------
+# --- EMA Micro-Scalper 5m (валидированные TP/SL/плечо из симуляции) -------------
 ema_scalper:
-  enabled: false
+  enabled: true
   exchange: "hyperliquid"
-  testnet: true
+  testnet: false
   dry_run: true
   pairs:
     - symbol: "ETH/USDC:USDC"
       enabled: true
     - symbol: "BTC/USDC:USDC"
-      enabled: false
+      enabled: true
   timeframe: "5m"
   entry:
     ema_period: 9
@@ -131,7 +129,6 @@ ema_scalper:
   bot:
     loop_interval_sec: 10
 
-# Главный цикл stat-arb + флаги симуляции (§3)
 bot:
   loop_interval_sec: 30
   dry_run: true
