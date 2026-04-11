@@ -1,19 +1,26 @@
+# Торговля только через Hyperliquid (ccxt). Ключи: HYPERLIQUID_* в .env
 exchange:
-  name: "binance"
-  testnet: true
+  name: "hyperliquid"
+  testnet: false # true = тестнет HL; false = mainnet (реальная маржа)
 
 pairs:
-  - symbol_a: "BTC/USDT:USDT"
-    symbol_b: "XRP/USDT:USDT"
+  # Stat-arb (режим pairs): только символы Hyperliquid, котируются в USDC
+  - symbol_a: "BTC/USDC:USDC"
+    symbol_b: "XRP/USDC:USDC"
     hedge_ratio: 1.32
     enabled: true
+
+  - symbol_a: "ETH/USDC:USDC"
+    symbol_b: "BNB/USDC:USDC"
+    hedge_ratio: 1.1
+    enabled: false
 
 scalping:
   enabled: true
   pairs:
-    - symbol: "BTC/USDT:USDT"
+    - symbol: "BTC/USDC:USDC"
       enabled: true
-    - symbol: "ETH/USDT:USDT"
+    - symbol: "ETH/USDC:USDC"
       enabled: true
   timeframe: "1m"
   deposit_usdt: 50
@@ -31,7 +38,7 @@ scalping:
   filters:
     no_trade_hours: [0, 1]
     min_volume_usdt: 1000000
-  ohlcv_backtest: "binance"
+  ohlcv_backtest: "hyperliquid"
 
 strategy:
   mode: "scalping"
@@ -43,11 +50,11 @@ strategy:
 
 breakout:
   enabled: false
-  exchange: "binance"
-  testnet: true
+  exchange: "hyperliquid"
+  testnet: false
   dry_run: true
   pairs:
-    - symbol: "ETH/USDT:USDT"
+    - symbol: "ETH/USDC:USDC"
       enabled: false
   timeframe: "1h"
   lookback_candles: 20
@@ -66,11 +73,11 @@ breakout:
 
 ema_scalper:
   enabled: false
-  exchange: "binance"
-  testnet: true
+  exchange: "hyperliquid"
+  testnet: false
   dry_run: true
   pairs:
-    - symbol: "ETH/USDT:USDT"
+    - symbol: "ETH/USDC:USDC"
       enabled: false
   timeframe: "5m"
   entry:
@@ -96,12 +103,12 @@ ema_scalper:
     loop_interval_sec: 10
 
 risk:
-  leverage: 2
-  max_daily_loss_pct: 10
+  leverage: 5
+  max_daily_loss_pct: 3.0
   max_total_exposure: 2000
   commission_pct: 0.1
   max_position_usdt: 500
 
 bot:
-  loop_interval_sec: 10
+  loop_interval_sec: 30
   dry_run: true
