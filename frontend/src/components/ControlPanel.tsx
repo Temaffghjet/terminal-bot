@@ -2,6 +2,8 @@ import { AlertTriangle } from "lucide-react";
 import { useState } from "react";
 
 export type ExchangeUsdtSlice = {
+  /** USDT (Binance и др.) или USDC (Hyperliquid) — с бэкенда из ccxt. */
+  currency?: string;
   free: number;
   used: number;
   total: number;
@@ -97,14 +99,14 @@ export default function ControlPanel({
         {tradingCapital && (
           <span
             className="border border-emerald-600/50 rounded px-2 py-0.5 bg-emerald-950/30 text-emerald-300 max-w-[min(100vw,520px)]"
-            title="Баланс USDT с биржи (кэш ~30 с) + лимиты из config.yaml"
+            title="Баланс USDT/USDC с биржи (кэш ~30 с) + лимиты из config.yaml"
           >
             Сумма для торговли:{" "}
             <strong className="text-white">
               {tradingCapital.exchange_errors?.main
                 ? `API: ${String(tradingCapital.exchange_errors.main).slice(0, 40)}`
                 : tradingCapital.exchange_usdt?.main
-                  ? `${tradingCapital.exchange_usdt.main.free.toFixed(2)} free / ${tradingCapital.exchange_usdt.main.total.toFixed(2)} USDT`
+                  ? `${tradingCapital.exchange_usdt.main.free.toFixed(2)} free / ${tradingCapital.exchange_usdt.main.total.toFixed(2)} ${tradingCapital.exchange_usdt.main.currency ?? "USDT"}`
                   : "—"}
             </strong>
             <span className="text-gray-500 mx-1">|</span>

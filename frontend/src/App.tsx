@@ -1,13 +1,11 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useMemo } from "react";
 import ControlPanel, { type TradingCapitalPayload } from "./components/ControlPanel";
 import PnLPanel from "./components/PnLPanel";
 import ActivePositionsTable from "./components/ActivePositionsTable";
 import RiskMonitor from "./components/RiskMonitor";
 import ScalpingStats from "./components/ScalpingStats";
 import SignalIndicator, { type ScalpIndicatorSnapshot } from "./components/SignalIndicator";
-import SimulationPanel, { type SimulationSnapshot } from "./components/SimulationPanel";
 import ModeBanner from "./components/ModeBanner";
-import SimulationStrip from "./components/SimulationStrip";
 import SpreadChart from "./components/SpreadChart";
 import TradeLog from "./components/TradeLog";
 import BreakoutPositions from "./components/breakout/BreakoutPositions";
@@ -25,25 +23,10 @@ const STOP_Z = 3.0;
 
 export default function App() {
   const { state, isConnected, sendMessage } = useWebSocket();
-  const [fileSimulation, setFileSimulation] = useState<SimulationSnapshot | null>(null);
-
-  useEffect(() => {
-    fetch("/simulation.json")
-      .then((r) => (r.ok ? r.json() : null))
-      .then((data) => setFileSimulation(data))
-      .catch(() => setFileSimulation(null));
-  }, []);
 
   const botStatus = (state?.bot_status as string) ?? "stopped";
   const strategyMode = (state?.strategy_mode as string) ?? "pairs";
   const exchangeName = (state?.exchange_name as string) ?? "";
-  const simulationWs = state?.simulation as SimulationSnapshot | undefined;
-  const simulation = simulationWs ?? fileSimulation;
-  const simSource: "websocket" | "file" | "none" = simulationWs
-    ? "websocket"
-    : fileSimulation
-      ? "file"
-      : "none";
   const positions = (state?.positions as React.ComponentProps<typeof PnLPanel>["positions"]) ?? [];
   const metrics =
     (state?.metrics as Record<string, { zscore?: number | null; spread_history?: number[]; zscore_history?: number[] }>) ??
@@ -125,9 +108,15 @@ export default function App() {
   return (
     <div className="min-h-screen flex flex-col bg-terminal-bg text-gray-100 font-mono text-sm">
       <ModeBanner testnet={flags.testnet !== false} dryRun={flags.dry_run !== false} />
-      <SimulationStrip exchangeName={exchangeName} simulation={simulation} strategyMode={strategyMode} />
-
-      <SimulationPanel simulation={simulation} source={simSource} />
+      <div className="border-b border-gray-800 px-3 py-1.5 bg-[#080810] text-[11px] text-gray-400 flex flex-wrap gap-x-6 gap-y-1 items-center">
+        <span>
+          Биржа:{" "}
+          <span className="text-terminal-profit font-semibold uppercase">{exchangeName || "—"}</span>
+          {strategyMode === "scalping" && (
+            <span className="ml-2 text-gray-600">live-данные с биржи из config (exchange.name).</span>
+          )}
+        </span>
+      </div>
 
       <ControlPanel
         botStatus={isConnected ? botStatus : "stopped"}

@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import signal
 import sys
@@ -16,18 +15,6 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
-
-_SCALP_SIM_JSON = ROOT / "data" / "last_scalping_sim.json"
-
-
-def load_scalping_simulation_snapshot() -> dict | None:
-    try:
-        if _SCALP_SIM_JSON.is_file():
-            with open(_SCALP_SIM_JSON, encoding="utf-8") as f:
-                return json.load(f)
-    except Exception:
-        pass
-    return None
 
 from backend.config import get_env, load_config
 from backend.data import db as dbmod
@@ -597,21 +584,35 @@ async def scalping_bot_loop() -> None:
         await asyncio.sleep(loop_sec)
 
 
-def _usdt_from_ccxt_balance(bal: dict) -> dict | None:
-    """Из unified fetch_balance ccxt — USDT (futures / spot)."""
+def _quote_balance_from_ccxt(bal: dict) -> dict | None:
+    """USDT (Binance/Bybit) или USDC (Hyperliquid и др.) из unified fetch_balance ccxt."""
     if not bal:
         return None
-    u = bal.get("USDT")
-    if isinstance(u, dict):
-        return {
-            "free": float(u.get("free") or 0),
-            "used": float(u.get("used") or 0),
-            "total": float(u.get("total") or 0),
-        }
+    best: dict | None = None
+    best_score = -1.0
+    for code in ("USDT", "USDC"):
+        u = bal.get(code)
+        if not isinstance(u, dict):
+            continue
+        total = float(u.get("total") or 0)
+        free = float(u.get("free") or 0)
+        score = max(total, free)
+        if score > best_score or best is None:
+            best_score = score
+            best = {
+                "currency": code,
+                "free": free,
+                "used": float(u.get("used") or 0),
+                "total": total,
+            }
+    if best:
+        return best
     tot = bal.get("total")
-    if isinstance(tot, dict) and "USDT" in tot:
-        t = float(tot["USDT"] or 0)
-        return {"free": 0.0, "used": 0.0, "total": t}
+    if isinstance(tot, dict):
+        for code in ("USDT", "USDC"):
+            if code in tot:
+                t = float(tot[code] or 0)
+                return {"currency": code, "free": 0.0, "used": 0.0, "total": t}
     return None
 
 
@@ -647,7 +648,7 @@ async def build_trading_capital_payload(rt: BotRuntime) -> dict:
             return key, None, None
         try:
             bal = await asyncio.to_thread(ex.fetch_balance)  # type: ignore[attr-defined]
-            u = _usdt_from_ccxt_balance(bal) if isinstance(bal, dict) else None
+            u = _quote_balance_from_ccxt(bal) if isinstance(bal, dict) else None
             return key, u, None
         except Exception as e:
             return key, None, str(e)
@@ -809,7 +810,6 @@ async def build_state_payload(rt: BotRuntime, metrics_by_pair: dict | None = Non
         "warming_up": rt.warming_up,
         "strategy_mode": mode,
         "exchange_name": str(ex.get("name", "") or ""),
-        "simulation": load_scalping_simulation_snapshot(),
         "scalping_metrics": scalping_metrics,
         "positions": positions_out,
         "metrics": merged_metrics,
