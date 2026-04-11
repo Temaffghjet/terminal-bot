@@ -1,11 +1,11 @@
-# Тест $100 — stat-arb, testnet + dry_run
+# §8 — Тест $100: stat-arb, Hyperliquid testnet + dry_run
 exchange:
-  name: "binance"
+  name: "hyperliquid"
   testnet: true
 
 pairs:
-  - symbol_a: "BTC/USDT:USDT"
-    symbol_b: "XRP/USDT:USDT"
+  - symbol_a: "BTC/USDC:USDC"
+    symbol_b: "XRP/USDC:USDC"
     hedge_ratio: 1.32
     enabled: true
 

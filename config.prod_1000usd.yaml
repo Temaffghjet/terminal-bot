@@ -1,19 +1,19 @@
-# Боевой конфиг — только после тестов; testnet: false осознанно
+# §8 — Боевой пресет ($500–2k): Hyperliquid mainnet; только после тестов
 exchange:
-  name: "binance"
+  name: "hyperliquid"
   testnet: false
 
 pairs:
-  - symbol_a: "BTC/USDT:USDT"
-    symbol_b: "ETH/USDT:USDT"
+  - symbol_a: "BTC/USDC:USDC"
+    symbol_b: "ETH/USDC:USDC"
     hedge_ratio: 0.95
     enabled: true
-  - symbol_a: "BTC/USDT:USDT"
-    symbol_b: "XRP/USDT:USDT"
+  - symbol_a: "BTC/USDC:USDC"
+    symbol_b: "XRP/USDC:USDC"
     hedge_ratio: 1.32
     enabled: true
-  - symbol_a: "ETH/USDT:USDT"
-    symbol_b: "SOL/USDT:USDT"
+  - symbol_a: "ETH/USDC:USDC"
+    symbol_b: "SOL/USDC:USDC"
     hedge_ratio: 1.05
     enabled: false
 

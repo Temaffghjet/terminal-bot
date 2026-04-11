@@ -1,10 +1,16 @@
-# Торговля только через Hyperliquid (ccxt). Ключи: HYPERLIQUID_* в .env
+# =============================================================================
+# Trading Bot — конфиг под спецификацию Cursor AI (§1–12), только Hyperliquid.
+# Ключи: HYPERLIQUID_WALLET_ADDRESS + HYPERLIQUID_PRIVATE_KEY в .env
+# Режимы UI: testnet → жёлтый баннер; dry_run → синий; оба false → красный LIVE.
+# =============================================================================
+
 exchange:
   name: "hyperliquid"
-  testnet: false # true = тестнет HL; false = mainnet (реальная маржа)
+  # §3 / §9: на старте лучше testnet; mainnet + реальная маржа → false
+  testnet: true
 
+# --- Stat-Arb (спред, z-score) — strategy.mode: "pairs" ----------------------------
 pairs:
-  # Stat-arb (режим pairs): только символы Hyperliquid, котируются в USDC
   - symbol_a: "BTC/USDC:USDC"
     symbol_b: "XRP/USDC:USDC"
     hedge_ratio: 1.32
@@ -15,13 +21,40 @@ pairs:
     hedge_ratio: 1.1
     enabled: false
 
+  # Как в §8 config.prod — включить позже
+  - symbol_a: "BTC/USDC:USDC"
+    symbol_b: "ETH/USDC:USDC"
+    hedge_ratio: 0.95
+    enabled: false
+
+  - symbol_a: "ETH/USDC:USDC"
+    symbol_b: "SOL/USDC:USDC"
+    hedge_ratio: 1.05
+    enabled: false
+
+strategy:
+  mode: "pairs" # "pairs" = stat-arb | "scalping" = микроскальп по scalping.*
+  timeframe: "15m"
+  lookback_periods: 60
+  entry_zscore: 1.5
+  exit_zscore: 0.3
+  stop_zscore: 3.0
+
+risk:
+  max_position_usdt: 500
+  max_total_exposure: 2000
+  max_daily_loss_pct: 3.0
+  leverage: 5
+  commission_pct: 0.1
+
+# Микроскальп (отдельный режим; выкл. пока работает stat-arb)
 scalping:
-  enabled: true
+  enabled: false
   pairs:
     - symbol: "BTC/USDC:USDC"
-      enabled: true
+      enabled: false
     - symbol: "ETH/USDC:USDC"
-      enabled: true
+      enabled: false
   timeframe: "1m"
   deposit_usdt: 50
   risk_per_trade_pct: 20
@@ -40,21 +73,16 @@ scalping:
     min_volume_usdt: 1000000
   ohlcv_backtest: "hyperliquid"
 
-strategy:
-  mode: "scalping"
-  timeframe: "15m"
-  lookback_periods: 60
-  entry_zscore: 1.5
-  exit_zscore: 0.3
-  stop_zscore: 3.0
-
+# --- §11 Breakout 1H (опционально, параллельный цикл) -----------------------------
 breakout:
   enabled: false
   exchange: "hyperliquid"
-  testnet: false
+  testnet: true
   dry_run: true
   pairs:
     - symbol: "ETH/USDC:USDC"
+      enabled: true
+    - symbol: "BTC/USDC:USDC"
       enabled: false
   timeframe: "1h"
   lookback_candles: 20
@@ -62,22 +90,27 @@ breakout:
   exit:
     take_profit_pct: 4.0
     stop_loss_pct: 2.0
+    use_trailing_stop: false
   risk:
     balance_usdt: 1000
     position_size_pct: 15
     max_open_positions: 2
     leverage: 3
     max_daily_loss_pct: 5.0
+    use_limit_orders: true
   bot:
     loop_interval_sec: 60
 
+# --- §12 EMA Micro-Scalper 5m (опционально; «primary» для малых депозитов) --------
 ema_scalper:
   enabled: false
   exchange: "hyperliquid"
-  testnet: false
+  testnet: true
   dry_run: true
   pairs:
     - symbol: "ETH/USDC:USDC"
+      enabled: true
+    - symbol: "BTC/USDC:USDC"
       enabled: false
   timeframe: "5m"
   entry:
@@ -99,16 +132,11 @@ ema_scalper:
     max_open_positions: 2
     leverage: 5
     max_daily_loss_pct: 5.0
+    use_limit_orders: true
   bot:
     loop_interval_sec: 10
 
-risk:
-  leverage: 5
-  max_daily_loss_pct: 3.0
-  max_total_exposure: 2000
-  commission_pct: 0.1
-  max_position_usdt: 500
-
+# Главный цикл stat-arb + флаги симуляции (§3)
 bot:
   loop_interval_sec: 30
   dry_run: true
