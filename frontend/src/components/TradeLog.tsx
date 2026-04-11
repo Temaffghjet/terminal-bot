@@ -8,6 +8,8 @@ type TradeRow = {
   direction?: string;
   zscore_entry?: number | null;
   zscore_exit?: number | null;
+  entry_price_a?: number | null;
+  exit_price_a?: number | null;
   pnl_usdt?: number | null;
   close_reason?: string | null;
   dry_run?: number | null;
@@ -74,7 +76,7 @@ export default function TradeLog({ trades }: Props) {
               <th className="text-left p-1">Pair</th>
               <th className="text-left p-1">Action</th>
               <th className="text-left p-1">Direction</th>
-              <th className="text-left p-1">Z in → out</th>
+              <th className="text-left p-1">Z in → out / цена</th>
               <th className="text-right p-1">P&amp;L</th>
               <th className="text-left p-1">Reason</th>
             </tr>
@@ -91,7 +93,39 @@ export default function TradeLog({ trades }: Props) {
                 </td>
                 <td className="p-1">{t.direction}</td>
                 <td className="p-1">
-                  {t.zscore_entry?.toFixed?.(2) ?? "—"} → {t.zscore_exit?.toFixed?.(2) ?? "—"}
+                  {(() => {
+                    const scalp =
+                      (t.pair_id?.startsWith("scalp:") ?? false) ||
+                      String(t.direction ?? "").includes("SCALP");
+                    if (scalp) {
+                      const a =
+                        t.entry_price_a != null && t.entry_price_a !== undefined
+                          ? Number(t.entry_price_a).toFixed(2)
+                          : "—";
+                      const b =
+                        t.exit_price_a != null && t.exit_price_a !== undefined
+                          ? Number(t.exit_price_a).toFixed(2)
+                          : "—";
+                      return (
+                        <>
+                          {a} → {b}
+                        </>
+                      );
+                    }
+                    const ze =
+                      t.zscore_entry != null && t.zscore_entry !== undefined && !Number.isNaN(t.zscore_entry)
+                        ? t.zscore_entry.toFixed(2)
+                        : "—";
+                    const zx =
+                      t.zscore_exit != null && t.zscore_exit !== undefined && !Number.isNaN(t.zscore_exit)
+                        ? t.zscore_exit.toFixed(2)
+                        : "—";
+                    return (
+                      <>
+                        {ze} → {zx}
+                      </>
+                    );
+                  })()}
                 </td>
                 <td
                   className={`p-1 text-right ${(t.pnl_usdt ?? 0) >= 0 ? "text-terminal-profit" : "text-terminal-loss"}`}

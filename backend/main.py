@@ -216,8 +216,6 @@ class BotRuntime:
         self.pm.scalp_remove(symbol)
         ts = datetime.now(timezone.utc).isoformat()
         pid = scalp_id(symbol)
-        ind = self.scalp_signal_by_symbol.get(symbol) or {}
-        ema_x = float(ind.get("ema") or 0.0)
         dbmod.insert_trade(
             self.conn,
             {
@@ -236,8 +234,9 @@ class BotRuntime:
                 "exit_price_a": exit_px,
                 "exit_price_b": None,
                 "pnl_usdt": net,
-                "zscore_entry": 0.0,
-                "zscore_exit": ema_x,
+                # z-score только для stat-arb; для скальпа смотри entry/exit price в колонке лога
+                "zscore_entry": None,
+                "zscore_exit": None,
                 "close_reason": reason,
                 "dry_run": 1 if (self.config.get("bot") or {}).get("dry_run") else 0,
             },
@@ -561,7 +560,7 @@ async def scalping_bot_loop() -> None:
                         "exit_price_a": None,
                         "exit_price_b": None,
                         "pnl_usdt": None,
-                        "zscore_entry": float(ind.get("ema") or 0.0),
+                        "zscore_entry": None,
                         "zscore_exit": None,
                         "close_reason": None,
                         "dry_run": 1 if dry else 0,
