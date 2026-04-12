@@ -1,38 +1,19 @@
-# =============================================================================
-# Микроскальп EMA (§12 спецификации) на Hyperliquid, плечо x5, TF 5m.
-# Stat-arb (pairs) выключен — крутится только ema_scalper_loop.
-# Ключи: HYPERLIQUID_* в .env
-# =============================================================================
+# Hyperliquid + EMA Scalper 5m. Секреты: HYPERLIQUID_* в .env
+# Stat-arb / breakout / старый scalping 1m в коде выключены — см. strategy.mode + флаги enabled.
 
 exchange:
-  name: "hyperliquid"
-  # mainnet + реальная маржа → false; тестнет HL → true
+  name: hyperliquid
   testnet: false
 
-# Stat-arb — не используется (все пары off), оставлено для быстрого переключения
-pairs:
-  - symbol_a: "BTC/USDC:USDC"
-    symbol_b: "ETH/USDC:USDC"
-    hedge_ratio: 0.95
-    enabled: false
-  - symbol_a: "BTC/USDC:USDC"
-    symbol_b: "SOL/USDC:USDC"
-    hedge_ratio: 1.32
-    enabled: false
-  - symbol_a: "ETH/USDC:USDC"
-    symbol_b: "SOL/USDC:USDC"
-    hedge_ratio: 1.05
-    enabled: false
-
-# Режим "scalping" + scalping.enabled=false → не запускается scalping_bot_loop,
-# только ema_scalper (см. run_all_loops в main.py)
 strategy:
-  mode: "scalping"
-  timeframe: "15m"
+  mode: scalping
+  timeframe: 15m
   lookback_periods: 60
   entry_zscore: 1.5
   exit_zscore: 0.3
   stop_zscore: 3.0
+
+pairs: []
 
 risk:
   max_position_usdt: 500
@@ -41,63 +22,15 @@ risk:
   leverage: 5
   commission_pct: 0.1
 
-# Старый цикл scalping.* (1m) — выкл.; используем ema_scalper ниже
 scalping:
   enabled: false
-  pairs:
-    - symbol: "BTC/USDC:USDC"
-      enabled: false
-    - symbol: "ETH/USDC:USDC"
-      enabled: false
-  timeframe: "1m"
-  deposit_usdt: 50
-  risk_per_trade_pct: 20
-  max_positions: 2
-  entry:
-    ema_period: 9
-    volume_multiplier: 1.2
-    min_candles: 2
-    volume_lookback: 10
-  exit:
-    take_profit_pct: 0.6
-    stop_loss_pct: 0.5
-    max_hold_minutes: 3
-  filters:
-    no_trade_hours: [0, 1]
-    min_volume_usdt: 1000000
-  ohlcv_backtest: "hyperliquid"
 
 breakout:
   enabled: false
-  exchange: "hyperliquid"
-  testnet: false
-  dry_run: true
-  pairs:
-    - symbol: "ETH/USDC:USDC"
-      enabled: false
-    - symbol: "BTC/USDC:USDC"
-      enabled: false
-  timeframe: "1h"
-  lookback_candles: 20
-  volume_multiplier: 1.2
-  exit:
-    take_profit_pct: 4.0
-    stop_loss_pct: 2.0
-    use_trailing_stop: false
-  risk:
-    balance_usdt: 1000
-    position_size_pct: 15
-    max_open_positions: 2
-    leverage: 3
-    max_daily_loss_pct: 5.0
-    use_limit_orders: true
-  bot:
-    loop_interval_sec: 60
 
-# --- EMA Micro-Scalper 5m (валидированные TP/SL/плечо из симуляции) -------------
 ema_scalper:
   enabled: true
-  exchange: "hyperliquid"
+  exchange: hyperliquid
   testnet: false
   dry_run: true
   pairs:
@@ -105,7 +38,7 @@ ema_scalper:
       enabled: true
     - symbol: "BTC/USDC:USDC"
       enabled: true
-  timeframe: "5m"
+  timeframe: 5m
   entry:
     ema_period: 9
     volume_lookback: 10

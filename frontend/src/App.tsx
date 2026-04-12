@@ -33,7 +33,11 @@ export default function App() {
     {};
   const pnl = (state?.pnl as { total_today?: number; unrealized?: number; realized_today?: number }) ?? {};
   const trades = (state?.trades_recent as React.ComponentProps<typeof TradeLog>["trades"]) ?? [];
-  const flags = (state?.config_flags as { dry_run?: boolean; testnet?: boolean }) ?? {
+  const flags = (state?.config_flags as {
+    dry_run?: boolean;
+    testnet?: boolean;
+    risk_leverage?: number;
+  }) ?? {
     dry_run: true,
     testnet: true,
   };
@@ -85,6 +89,16 @@ export default function App() {
     return s;
   }, [breakoutState?.positions]);
 
+  const emaPolicy = useMemo(() => {
+    const c = tradingCapital?.config;
+    if (c == null || c.ema_balance_usdt == null) return null;
+    const pct = c.ema_position_size_pct ?? 25;
+    const lev = c.ema_leverage ?? 5;
+    const margin = Number(c.ema_balance_usdt) * (pct / 100);
+    if (!(margin > 0)) return null;
+    return { marginUsdt: margin, nominalUsdt: margin * lev, leverage: lev };
+  }, [tradingCapital]);
+
   const emaChartSym = useMemo(() => {
     const ch = emaState?.candle_history ?? {};
     const keys = Object.keys(ch);
@@ -108,6 +122,14 @@ export default function App() {
   return (
     <div className="min-h-screen flex flex-col bg-terminal-bg text-gray-100 font-mono text-sm">
       <ModeBanner testnet={flags.testnet !== false} dryRun={flags.dry_run !== false} />
+      {!isConnected && (
+        <div className="border-b border-amber-700/50 bg-amber-950/50 px-3 py-2 text-amber-100/95 text-xs leading-snug">
+          Нет WebSocket к боту — поля «Биржа» и «Сумма для торговли» пустые: данные не с сервера. На Vercel
+          задайте <code className="text-amber-200">VITE_WS_URL=wss://ваш-хост:порт</code> (где крутится Python-бот)
+          и пересоберите проект; локально запустите бота на порту из <code className="text-amber-200">VITE_WS_PORT</code>
+          .
+        </div>
+      )}
       <div className="border-b border-gray-800 px-3 py-1.5 bg-[#080810] text-[11px] text-gray-400 flex flex-wrap gap-x-6 gap-y-1 items-center">
         <span>
           Биржа:{" "}
@@ -212,7 +234,7 @@ export default function App() {
         </div>
       ) : null}
 
-      <TradeLog trades={trades} />
+      <TradeLog trades={trades} scalpLeverage={flags.risk_leverage ?? 5} emaPolicy={emaPolicy} />
     </div>
   );
 }

@@ -23,6 +23,12 @@ export default function EMATradeLog({ trades }: { trades: Row[] }) {
               <th className="p-1">Время</th>
               <th className="p-1">Пара</th>
               <th className="p-1">Сторона</th>
+              <th className="p-1 text-right" title="Номинал позиции (с плечом)">
+                Номинал
+              </th>
+              <th className="p-1 text-right" title="Маржа (реальные деньги на счёте)">
+                Маржа
+              </th>
               <th className="p-1">Вход</th>
               <th className="p-1">Выход</th>
               <th className="p-1">Свечей</th>
@@ -35,6 +41,12 @@ export default function EMATradeLog({ trades }: { trades: Row[] }) {
             {trades.map((t) => {
               const reason = String(t.close_reason ?? "");
               const rc = reasonClass[reason] ?? "bg-gray-800 text-gray-300";
+              const lev = Math.max(1, Number(t.leverage ?? 1));
+              const margin = Number(t.size_usdt ?? 0);
+              let notion = Number(t.notional ?? 0);
+              if (!(notion > 0) && margin > 0) {
+                notion = margin * lev;
+              }
               return (
                 <tr key={String(t.id)} className="border-b border-gray-900">
                   <td className="p-1 font-mono whitespace-nowrap">
@@ -42,6 +54,13 @@ export default function EMATradeLog({ trades }: { trades: Row[] }) {
                   </td>
                   <td className="p-1">{String(t.symbol ?? "")}</td>
                   <td className="p-1">{String(t.side ?? "")}</td>
+                  <td className="p-1 text-right text-gray-300 whitespace-nowrap">
+                    ${notion.toFixed(2)}
+                    <span className="text-gray-600"> x{lev}</span>
+                  </td>
+                  <td className="p-1 text-right text-amber-200/90 whitespace-nowrap">
+                    ${margin.toFixed(2)}
+                  </td>
                   <td className="p-1">{Number(t.entry_price ?? 0).toFixed(2)}</td>
                   <td className="p-1">{Number(t.exit_price ?? 0).toFixed(2)}</td>
                   <td className="p-1">{String(t.candles_held ?? "")}</td>

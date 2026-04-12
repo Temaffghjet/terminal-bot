@@ -10,6 +10,10 @@ type Pos = {
   candles_held?: number;
   max_hold_candles?: number;
   leverage?: number;
+  /** маржа (реальные деньги) */
+  size_usdt?: number;
+  /** номинал позиции с плечом */
+  notional_usdt?: number;
   progress_to_tp?: number;
 };
 
@@ -52,6 +56,12 @@ export default function EMAPositionCard({
         const pnlOk = pnl >= 0;
         const held = p.candles_held ?? 0;
         const maxh = p.max_hold_candles ?? 12;
+        const lev = Math.max(1, p.leverage ?? 1);
+        const margin = p.size_usdt ?? 0;
+        let notion = p.notional_usdt ?? 0;
+        if (!(notion > 0) && margin > 0) {
+          notion = margin * lev;
+        }
         return (
           <div
             key={p.symbol}
@@ -66,6 +76,18 @@ export default function EMAPositionCard({
                 свеча {held} / {maxh}
               </span>
             </div>
+            {(notion > 0 || margin > 0) && (
+              <div className="mb-1 text-[10px] text-gray-400 flex flex-wrap gap-x-3 gap-y-0.5">
+                <span>
+                  Номинал:{" "}
+                  <span className="text-gray-200">${notion > 0 ? notion.toFixed(2) : "—"}</span>
+                </span>
+                <span>
+                  Маржа:{" "}
+                  <span className="text-amber-200/90">${margin > 0 ? margin.toFixed(2) : "—"}</span>
+                </span>
+              </div>
+            )}
             <div className="mb-2">
               Вход: ${p.entry_price.toFixed(2)} → Сейчас: ${p.current_price.toFixed(2)}
             </div>

@@ -165,10 +165,17 @@ class OrderManager:
     async def close_breakout_market(self, symbol: str, side_was_long: bool, amount: float) -> dict[str, Any]:
         return await self.close_scalp_market(symbol, side_was_long, amount)
 
-    async def close_scalp_market(self, symbol: str, side_was_long: bool, amount: float) -> dict[str, Any]:
+    async def close_scalp_market(
+        self,
+        symbol: str,
+        side_was_long: bool,
+        amount: float,
+        dry_run_override: bool | None = None,
+    ) -> dict[str, Any]:
         close_side = "sell" if side_was_long else "buy"
         amount = float(self._ex.amount_to_precision(symbol, amount))
-        if self._dry:
+        dry = self._dry if dry_run_override is None else bool(dry_run_override)
+        if dry:
             ticker = await asyncio.to_thread(self._ex.fetch_ticker, symbol)
             px = float(ticker["last"] or ticker["close"] or 0)
             return {"dry_run": True, "exit_price": px, "side": close_side, "amount": amount}

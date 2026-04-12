@@ -76,6 +76,9 @@ class EMAScalpPosition:
             "max_hold_candles": self.max_hold_candles,
             "entry_ts_ms": self.entry_ts_ms,
             "leverage": self.leverage,
+            # маржа (реальные деньги) и номинал позиции (с плечом)
+            "size_usdt": round(self.size_usdt, 4),
+            "notional_usdt": round(self.notional, 4),
             "progress_to_tp": round(prog, 1),
             "status": self.status,
         }

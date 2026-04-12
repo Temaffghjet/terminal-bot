@@ -16,6 +16,9 @@ export type TradingCapitalPayload = {
     stat_arb_max_total_exposure_usdt: number;
     breakout_balance_usdt: number;
     ema_balance_usdt: number;
+    /** доля депозита EMA на одну сделку, % */
+    ema_position_size_pct?: number;
+    ema_leverage?: number;
   };
   exchange_usdt: {
     main: ExchangeUsdtSlice;

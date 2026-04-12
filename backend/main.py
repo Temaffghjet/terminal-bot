@@ -264,10 +264,14 @@ class BotRuntime:
         om = self.orders_ema or self.orders
         if not om or not self.conn:
             return
+        es_cfg = self.config.get("ema_scalper") or {}
+        dry_e = bool(es_cfg.get("dry_run", (self.config.get("bot") or {}).get("dry_run", True)))
         rk = (self.config.get("risk") or {})
         comm_side = float(rk.get("commission_pct", 0.1)) / 100.0
         amt = pos.position_qty()
-        res = await om.close_scalp_market(symbol, pos.side == "LONG", amt)
+        res = await om.close_scalp_market(
+            symbol, pos.side == "LONG", amt, dry_run_override=dry_e
+        )
         exit_px = float(res.get("exit_price") or exit_px)
         entry = pos.entry_price
         if pos.side == "LONG":
@@ -285,8 +289,6 @@ class BotRuntime:
         bms = bar_ts_ms if bar_ts_ms is not None else int(time.time() * 1000)
         bars = pos.bars_held(bms)
         pnl_pct_row = (net / max(pos.notional, 1e-12)) * 100.0
-        es_cfg = self.config.get("ema_scalper") or {}
-        dry_e = bool(es_cfg.get("dry_run", (self.config.get("bot") or {}).get("dry_run", True)))
         dbmod.insert_scalp_trade(
             self.conn,
             {
@@ -447,140 +449,147 @@ async def scalping_bot_loop() -> None:
         return datetime.now(timezone.utc).isoformat()
 
     while not RT._shutdown:
-        metrics_scalp: dict = {}
-        any_warming = False
-        exp = sum(abs(p.size * p.entry_price) for p in RT.pm.scalp_all().values())
-        if RT.risk:
-            RT.risk.set_open_notional(exp)
-
-        for symbol in symbols:
-            await asyncio.sleep(0.1)
-            try:
-                ohlcv = await asyncio.to_thread(
-                    RT.exchange.fetch_ohlcv, symbol, tf, None, candle_limit
+        try:
+            metrics_scalp: dict = {}
+            any_warming = False
+            exp = sum(abs(p.size * p.entry_price) for p in RT.pm.scalp_all().values())
+            if RT.risk:
+                RT.risk.set_open_notional(exp)
+    
+            for symbol in symbols:
+                await asyncio.sleep(0.1)
+                try:
+                    ohlcv = await asyncio.to_thread(
+                        RT.exchange.fetch_ohlcv, symbol, tf, None, candle_limit
+                    )
+                except Exception as e:
+                    logger.warning("OHLCV %s: %s", symbol, e)
+                    any_warming = True
+                    continue
+                if len(ohlcv) < 12:
+                    any_warming = True
+                    continue
+    
+                ind = RT.micro_signals.calculate_indicators(ohlcv) if RT.micro_signals else {}
+                RT.scalp_signal_by_symbol[symbol] = ind
+                if symbol not in RT.ema_hist:
+                    RT.ema_hist[symbol] = deque(maxlen=100)
+                if ind.get("ema") is not None:
+                    RT.ema_hist[symbol].append(float(ind["ema"]))
+                ema_hist = list(RT.ema_hist[symbol])
+                metrics_scalp[symbol] = {
+                    "zscore": float(ind["ema"]) if ind.get("ema") is not None else None,
+                    "zscore_history": ema_hist,
+                    "spread_history": [0.0] * len(ema_hist),
+                    "scalp_mode": True,
+                    "has_open_position": RT.pm.scalp_get(symbol) is not None,
+                    "indicators": ind,
+                }
+    
+                ticker = await asyncio.to_thread(RT.exchange.fetch_ticker, symbol)
+                last = float(ticker["last"] or ticker["close"] or (ohlcv[-1][4] if ohlcv else 0))
+                RT.mark_prices[symbol] = last
+    
+                pos = RT.pm.scalp_get(symbol)
+                now = datetime.now(timezone.utc)
+                ema_now = float(ind["ema"]) if ind.get("ema") is not None else last
+    
+                if pos:
+                    should, reason = pos.should_exit(
+                        last, ema_now, now, tp_pct, sl_pct, int(max_hold)
+                    )
+                    if should:
+                        await RT._close_scalp(symbol, pos, reason)
+                    continue
+    
+                bar_ts = int(ohlcv[-1][0])
+                if RT.scalp_last_entry_bar_ts.get(symbol) == bar_ts:
+                    continue
+    
+                sig = (
+                    RT.micro_signals.check_entry(symbol, ohlcv, has_position=False)
+                    if RT.micro_signals
+                    else {"action": "HOLD"}
                 )
-            except Exception as e:
-                logger.warning("OHLCV %s: %s", symbol, e)
-                any_warming = True
-                continue
-            if len(ohlcv) < 12:
-                any_warming = True
-                continue
-
-            ind = RT.micro_signals.calculate_indicators(ohlcv) if RT.micro_signals else {}
-            RT.scalp_signal_by_symbol[symbol] = ind
-            if symbol not in RT.ema_hist:
-                RT.ema_hist[symbol] = deque(maxlen=100)
-            if ind.get("ema") is not None:
-                RT.ema_hist[symbol].append(float(ind["ema"]))
-            ema_hist = list(RT.ema_hist[symbol])
-            metrics_scalp[symbol] = {
-                "zscore": float(ind["ema"]) if ind.get("ema") is not None else None,
-                "zscore_history": ema_hist,
-                "spread_history": [0.0] * len(ema_hist),
-                "scalp_mode": True,
-                "has_open_position": RT.pm.scalp_get(symbol) is not None,
-                "indicators": ind,
-            }
-
-            ticker = await asyncio.to_thread(RT.exchange.fetch_ticker, symbol)
-            last = float(ticker["last"] or ticker["close"] or (ohlcv[-1][4] if ohlcv else 0))
-            RT.mark_prices[symbol] = last
-
-            pos = RT.pm.scalp_get(symbol)
-            now = datetime.now(timezone.utc)
-            ema_now = float(ind["ema"]) if ind.get("ema") is not None else last
-
-            if pos:
-                should, reason = pos.should_exit(
-                    last, ema_now, now, tp_pct, sl_pct, int(max_hold)
+                if sig.get("action") not in ("OPEN_LONG", "OPEN_SHORT"):
+                    continue
+                if RT.pm.scalp_count() >= max_pos:
+                    continue
+                ok, _ = RT.risk.check_can_open(scalp_id(symbol), notional, legs=1) if RT.risk else (True, "")
+                if not ok:
+                    continue
+    
+                side_buy = sig["action"] == "OPEN_LONG"
+                res = await RT.orders.open_scalp_market(symbol, "buy" if side_buy else "sell", notional)
+                entry = float(res.get("price") or float(ohlcv[-1][4]))
+                size = notional / entry if entry else 0.0
+                side = "LONG" if side_buy else "SHORT"
+                if side == "LONG":
+                    tp_price = entry * (1.0 + tp_pct / 100.0)
+                    sl_price = entry * (1.0 - sl_pct / 100.0)
+                else:
+                    tp_price = entry * (1.0 - tp_pct / 100.0)
+                    sl_price = entry * (1.0 + sl_pct / 100.0)
+                ts_open = ts_iso()
+                sp = ScalpPosition(
+                    symbol=symbol,
+                    side=side,
+                    size=size,
+                    entry_price=entry,
+                    entry_time=ts_open,
+                    take_profit=tp_price,
+                    stop_loss=sl_price,
+                    current_price=entry,
+                    entry_ts_ms=bar_ts,
                 )
-                if should:
-                    await RT._close_scalp(symbol, pos, reason)
-                continue
-
-            bar_ts = int(ohlcv[-1][0])
-            if RT.scalp_last_entry_bar_ts.get(symbol) == bar_ts:
-                continue
-
-            sig = (
-                RT.micro_signals.check_entry(symbol, ohlcv, has_position=False)
-                if RT.micro_signals
-                else {"action": "HOLD"}
-            )
-            if sig.get("action") not in ("OPEN_LONG", "OPEN_SHORT"):
-                continue
-            if RT.pm.scalp_count() >= max_pos:
-                continue
-            ok, _ = RT.risk.check_can_open(scalp_id(symbol), notional, legs=1) if RT.risk else (True, "")
-            if not ok:
-                continue
-
-            side_buy = sig["action"] == "OPEN_LONG"
-            res = await RT.orders.open_scalp_market(symbol, "buy" if side_buy else "sell", notional)
-            entry = float(res.get("price") or float(ohlcv[-1][4]))
-            size = notional / entry if entry else 0.0
-            side = "LONG" if side_buy else "SHORT"
-            if side == "LONG":
-                tp_price = entry * (1.0 + tp_pct / 100.0)
-                sl_price = entry * (1.0 - sl_pct / 100.0)
-            else:
-                tp_price = entry * (1.0 - tp_pct / 100.0)
-                sl_price = entry * (1.0 + sl_pct / 100.0)
-            ts_open = ts_iso()
-            sp = ScalpPosition(
-                symbol=symbol,
-                side=side,
-                size=size,
-                entry_price=entry,
-                entry_time=ts_open,
-                take_profit=tp_price,
-                stop_loss=sl_price,
-                current_price=entry,
-                entry_ts_ms=bar_ts,
-            )
-            RT.pm.scalp_set(symbol, sp)
-            RT.scalp_last_entry_bar_ts[symbol] = bar_ts
-            if RT.conn:
-                dbmod.insert_trade(
-                    RT.conn,
-                    {
-                        "timestamp": ts_open,
-                        "pair_id": scalp_id(symbol),
-                        "action": "OPEN",
-                        "direction": f"SCALP_{side}",
-                        "symbol_a": symbol,
-                        "symbol_b": "",
-                        "side_a": side,
-                        "side_b": "",
-                        "qty_a": size,
-                        "qty_b": None,
-                        "entry_price_a": entry,
-                        "entry_price_b": None,
-                        "exit_price_a": None,
-                        "exit_price_b": None,
-                        "pnl_usdt": None,
-                        "zscore_entry": None,
-                        "zscore_exit": None,
-                        "close_reason": None,
-                        "dry_run": 1 if dry else 0,
-                    },
+                RT.pm.scalp_set(symbol, sp)
+                RT.scalp_last_entry_bar_ts[symbol] = bar_ts
+                if RT.conn:
+                    dbmod.insert_trade(
+                        RT.conn,
+                        {
+                            "timestamp": ts_open,
+                            "pair_id": scalp_id(symbol),
+                            "action": "OPEN",
+                            "direction": f"SCALP_{side}",
+                            "symbol_a": symbol,
+                            "symbol_b": "",
+                            "side_a": side,
+                            "side_b": "",
+                            "qty_a": size,
+                            "qty_b": None,
+                            "entry_price_a": entry,
+                            "entry_price_b": None,
+                            "exit_price_a": None,
+                            "exit_price_b": None,
+                            "pnl_usdt": None,
+                            "zscore_entry": None,
+                            "zscore_exit": None,
+                            "close_reason": None,
+                            "dry_run": 1 if dry else 0,
+                        },
+                    )
+                logger.info(
+                    "SCALP OPEN %s %s size=%.6f entry=%.4f notional≈%.2f USDT TP=%.4f SL=%.4f",
+                    symbol,
+                    side,
+                    size,
+                    entry,
+                    notional,
+                    tp_price,
+                    sl_price,
                 )
-            logger.info(
-                "SCALP OPEN %s %s size=%.6f entry=%.4f notional≈%.2f USDT TP=%.4f SL=%.4f",
-                symbol,
-                side,
-                size,
-                entry,
-                notional,
-                tp_price,
-                sl_price,
-            )
+    
+            RT.warming_up = any_warming
+            RT.ws_metrics.update(metrics_scalp)
+            await safe_broadcast()
+            await asyncio.sleep(loop_sec)
 
-        RT.warming_up = any_warming
-        RT.ws_metrics.update(metrics_scalp)
-        await safe_broadcast()
-        await asyncio.sleep(loop_sec)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("scalping_bot_loop: итерация — продолжаем")
+            await asyncio.sleep(loop_sec)
 
 
 def _quote_balance_from_ccxt(bal: dict) -> dict | None:
@@ -622,13 +631,16 @@ async def build_trading_capital_payload(rt: BotRuntime) -> dict:
     sc_cfg = cfg.get("scalping") or {}
     br_cfg = cfg.get("breakout") or {}
     es_cfg = cfg.get("ema_scalper") or {}
+    es_risk = es_cfg.get("risk") or {}
     out: dict = {
         "config": {
             "scalping_deposit_usdt": float(sc_cfg.get("deposit_usdt", 50)),
             "stat_arb_max_leg_usdt": float(rk.get("max_position_usdt", 500)),
             "stat_arb_max_total_exposure_usdt": float(rk.get("max_total_exposure", 2000)),
             "breakout_balance_usdt": float((br_cfg.get("risk") or {}).get("balance_usdt", 1000)),
-            "ema_balance_usdt": float((es_cfg.get("risk") or {}).get("balance_usdt", 50)),
+            "ema_balance_usdt": float(es_risk.get("balance_usdt", 50)),
+            "ema_position_size_pct": float(es_risk.get("position_size_pct", 25)),
+            "ema_leverage": int(es_risk.get("leverage", 5)),
         },
         "exchange_usdt": {"main": None, "breakout": None, "ema": None},
         "exchange_errors": {},
@@ -689,13 +701,19 @@ async def build_trading_capital_payload(rt: BotRuntime) -> dict:
 
 
 async def safe_broadcast() -> None:
+    """Ошибки трансляции не завершают торговые циклы."""
     if not RT.hub:
         return
     if RT.broadcast_lock is None:
         RT.broadcast_lock = asyncio.Lock()
-    async with RT.broadcast_lock:
-        payload = await build_state_payload(RT)
-        await RT.hub.broadcast_json(payload)
+    try:
+        async with RT.broadcast_lock:
+            payload = await build_state_payload(RT)
+            await RT.hub.broadcast_json(payload)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception("safe_broadcast: пропуск итерации")
 
 
 async def build_state_payload(rt: BotRuntime, metrics_by_pair: dict | None = None) -> dict:
@@ -842,6 +860,7 @@ async def build_state_payload(rt: BotRuntime, metrics_by_pair: dict | None = Non
         "config_flags": {
             "dry_run": bool(bot.get("dry_run", True)),
             "testnet": bool(ex.get("testnet", True)),
+            "risk_leverage": int(rk.get("leverage", 5)),
         },
         "trading_capital": await build_trading_capital_payload(rt),
     }
@@ -865,169 +884,175 @@ async def stat_arb_bot_loop() -> None:
         RT.zscore_hist[pid] = deque(maxlen=100)
 
     while not RT._shutdown:
-        metrics_by_pair: dict = {}
-        any_warming = False
-        if RT.risk and RT.pm:
-            st0 = RT.pm.get_state()
-            exp = sum(
-                abs(x["leg_a"]["size"]) * x["leg_a"]["entry_price"]
-                + abs(x["leg_b"]["size"]) * x["leg_b"]["entry_price"]
-                for x in st0["positions"]
-            )
-            RT.risk.set_open_notional(exp)
-
-        for pair in enabled:
-            await asyncio.sleep(0.2)
-            pid = pair_id_from(pair["symbol_a"], pair["symbol_b"])
-            oa, ob = await asyncio.to_thread(
-                fetch_ohlcv_pair,
-                ex,
-                pair["symbol_a"],
-                pair["symbol_b"],
-                tf,
-                lookback + 5,
-            )
-            if len(oa) < lookback or len(ob) < lookback:
-                any_warming = True
-                metrics_by_pair[pid] = {
-                    "zscore": None,
-                    "spread": None,
-                    "hurst": None,
-                    "cointegrated": False,
-                    "spread_history": [],
-                    "zscore_history": list(RT.zscore_hist.get(pid, [])),
-                }
-                continue
-
-            closes_a = [x[4] for x in oa[-lookback:]]
-            closes_b = [x[4] for x in ob[-lookback:]]
-            idx = pd.RangeIndex(start=0, stop=len(closes_a))
-            pa = pd.Series(closes_a, index=idx)
-            pb = pd.Series(closes_b, index=idx)
-
-            metrics = get_all_metrics(pa, pb, cfg)
-            cfg_h = float(pair.get("hedge_ratio", 1.0))
-            ols_h = float(metrics.get("hedge_ratio", cfg_h))
-            if abs(ols_h - cfg_h) / max(cfg_h, 1e-9) > 0.1:
-                logger.info(
-                    "hedge_ratio deviates from config: ols=%.4f config=%.4f pair=%s",
-                    ols_h,
-                    cfg_h,
-                    pid,
+        try:
+            metrics_by_pair: dict = {}
+            any_warming = False
+            if RT.risk and RT.pm:
+                st0 = RT.pm.get_state()
+                exp = sum(
+                    abs(x["leg_a"]["size"]) * x["leg_a"]["entry_price"]
+                    + abs(x["leg_b"]["size"]) * x["leg_b"]["entry_price"]
+                    for x in st0["positions"]
                 )
-
-            z = metrics.get("zscore")
-            if z is not None and z == z:
-                RT.zscore_hist[pid].append(float(z))
-            metrics["zscore_history"] = list(RT.zscore_hist.get(pid, []))
-
-            pos = RT.pm.get(pid)
-            metrics["has_open_position"] = pos is not None
-            metrics["position_direction"] = pos.direction if pos else None
-
-            sig = RT.stat_signals.get_signal(metrics) if RT.stat_signals else {"action": "HOLD"}
-
-            ticker_a = await asyncio.to_thread(ex.fetch_ticker, pair["symbol_a"])
-            ticker_b = await asyncio.to_thread(ex.fetch_ticker, pair["symbol_b"])
-            price_a = float(ticker_a["last"] or ticker_a["close"] or 0)
-            price_b = float(ticker_b["last"] or ticker_b["close"] or 0)
-            if pos:
-                RT.pm.update_mark(pid, price_a, price_b, float(z or 0))
-
-            metrics_by_pair[pid] = {
-                "zscore": metrics.get("zscore"),
-                "spread": metrics.get("spread"),
-                "hurst": metrics.get("hurst"),
-                "cointegrated": metrics.get("cointegrated"),
-                "spread_history": metrics.get("spread_history", [])[-100:],
-                "zscore_history": metrics.get("zscore_history", [])[-100:],
-            }
-
-            ts = datetime.now(timezone.utc).isoformat()
-            if conn and z == z:
-                dbmod.insert_metrics_snapshot(
-                    conn,
-                    ts,
-                    pid,
-                    float(z),
-                    float(metrics.get("spread") or 0),
-                    float(metrics.get("hurst") or 0),
-                    price_a,
-                    price_b,
+                RT.risk.set_open_notional(exp)
+    
+            for pair in enabled:
+                await asyncio.sleep(0.2)
+                pid = pair_id_from(pair["symbol_a"], pair["symbol_b"])
+                oa, ob = await asyncio.to_thread(
+                    fetch_ohlcv_pair,
+                    ex,
+                    pair["symbol_a"],
+                    pair["symbol_b"],
+                    tf,
+                    lookback + 5,
                 )
-
-            if z != z:
-                continue
-
-            if sig["action"].startswith("OPEN") and not RT.pm.has(pid):
-                ok, reason = RT.risk.check_can_open(pid, max_leg) if RT.risk else (True, "")
-                if ok:
-                    res = await RT.orders.open_pair_trade(pair, sig, max_leg)
-                    if res.get("error"):
-                        logger.error("open_pair_trade error: %s", res["error"])
-                    else:
-                        la = res["leg_a"]
-                        lb = res["leg_b"]
-                        side_a = "LONG" if la["side"] == "buy" else "SHORT"
-                        side_b = "LONG" if lb["side"] == "buy" else "SHORT"
-                        ppos = PairPosition(
-                            pair_id=pid,
-                            leg_a=LegState(
-                                pair["symbol_a"],
-                                side_a,
-                                float(la["amount"]),
-                                float(la["price"]),
-                                float(la["price"]),
-                            ),
-                            leg_b=LegState(
-                                pair["symbol_b"],
-                                side_b,
-                                float(lb["amount"]),
-                                float(lb["price"]),
-                                float(lb["price"]),
-                            ),
-                            open_time=datetime.now(timezone.utc).isoformat(),
-                            zscore_at_entry=float(z or 0),
-                            current_zscore=float(z or 0),
-                            direction=direction_from_signal(sig["action"]),
-                        )
-                        RT.pm.set_position(pid, ppos)
-                        dbmod.insert_trade(
-                            conn,
-                            {
-                                "timestamp": ts,
-                                "pair_id": pid,
-                                "action": "OPEN",
-                                "direction": ppos.direction,
-                                "symbol_a": pair["symbol_a"],
-                                "symbol_b": pair["symbol_b"],
-                                "side_a": side_a,
-                                "side_b": side_b,
-                                "qty_a": ppos.leg_a.size,
-                                "qty_b": ppos.leg_b.size,
-                                "entry_price_a": ppos.leg_a.entry_price,
-                                "entry_price_b": ppos.leg_b.entry_price,
-                                "exit_price_a": None,
-                                "exit_price_b": None,
-                                "pnl_usdt": None,
-                                "zscore_entry": float(z or 0),
-                                "zscore_exit": None,
-                                "close_reason": None,
-                                "dry_run": 1 if bot_cfg.get("dry_run") else 0,
-                            },
-                        )
-                else:
-                    logger.info("skip open %s: %s", pid, reason)
-
-            elif sig["action"] == "CLOSE" and RT.pm.has(pid):
+                if len(oa) < lookback or len(ob) < lookback:
+                    any_warming = True
+                    metrics_by_pair[pid] = {
+                        "zscore": None,
+                        "spread": None,
+                        "hurst": None,
+                        "cointegrated": False,
+                        "spread_history": [],
+                        "zscore_history": list(RT.zscore_hist.get(pid, [])),
+                    }
+                    continue
+    
+                closes_a = [x[4] for x in oa[-lookback:]]
+                closes_b = [x[4] for x in ob[-lookback:]]
+                idx = pd.RangeIndex(start=0, stop=len(closes_a))
+                pa = pd.Series(closes_a, index=idx)
+                pb = pd.Series(closes_b, index=idx)
+    
+                metrics = get_all_metrics(pa, pb, cfg)
+                cfg_h = float(pair.get("hedge_ratio", 1.0))
+                ols_h = float(metrics.get("hedge_ratio", cfg_h))
+                if abs(ols_h - cfg_h) / max(cfg_h, 1e-9) > 0.1:
+                    logger.info(
+                        "hedge_ratio deviates from config: ols=%.4f config=%.4f pair=%s",
+                        ols_h,
+                        cfg_h,
+                        pid,
+                    )
+    
+                z = metrics.get("zscore")
+                if z is not None and z == z:
+                    RT.zscore_hist[pid].append(float(z))
+                metrics["zscore_history"] = list(RT.zscore_hist.get(pid, []))
+    
                 pos = RT.pm.get(pid)
-                reason = "zscore_revert" if "revert" in sig.get("reason", "") else "stop_zscore"
-                await RT._close_one(pid, pos, reason)
-
-        RT.warming_up = any_warming
-        RT.ws_metrics.update(metrics_by_pair)
-        await safe_broadcast()
-        await asyncio.sleep(loop_sec)
+                metrics["has_open_position"] = pos is not None
+                metrics["position_direction"] = pos.direction if pos else None
+    
+                sig = RT.stat_signals.get_signal(metrics) if RT.stat_signals else {"action": "HOLD"}
+    
+                ticker_a = await asyncio.to_thread(ex.fetch_ticker, pair["symbol_a"])
+                ticker_b = await asyncio.to_thread(ex.fetch_ticker, pair["symbol_b"])
+                price_a = float(ticker_a["last"] or ticker_a["close"] or 0)
+                price_b = float(ticker_b["last"] or ticker_b["close"] or 0)
+                if pos:
+                    RT.pm.update_mark(pid, price_a, price_b, float(z or 0))
+    
+                metrics_by_pair[pid] = {
+                    "zscore": metrics.get("zscore"),
+                    "spread": metrics.get("spread"),
+                    "hurst": metrics.get("hurst"),
+                    "cointegrated": metrics.get("cointegrated"),
+                    "spread_history": metrics.get("spread_history", [])[-100:],
+                    "zscore_history": metrics.get("zscore_history", [])[-100:],
+                }
+    
+                ts = datetime.now(timezone.utc).isoformat()
+                if conn and z == z:
+                    dbmod.insert_metrics_snapshot(
+                        conn,
+                        ts,
+                        pid,
+                        float(z),
+                        float(metrics.get("spread") or 0),
+                        float(metrics.get("hurst") or 0),
+                        price_a,
+                        price_b,
+                    )
+    
+                if z != z:
+                    continue
+    
+                if sig["action"].startswith("OPEN") and not RT.pm.has(pid):
+                    ok, reason = RT.risk.check_can_open(pid, max_leg) if RT.risk else (True, "")
+                    if ok:
+                        res = await RT.orders.open_pair_trade(pair, sig, max_leg)
+                        if res.get("error"):
+                            logger.error("open_pair_trade error: %s", res["error"])
+                        else:
+                            la = res["leg_a"]
+                            lb = res["leg_b"]
+                            side_a = "LONG" if la["side"] == "buy" else "SHORT"
+                            side_b = "LONG" if lb["side"] == "buy" else "SHORT"
+                            ppos = PairPosition(
+                                pair_id=pid,
+                                leg_a=LegState(
+                                    pair["symbol_a"],
+                                    side_a,
+                                    float(la["amount"]),
+                                    float(la["price"]),
+                                    float(la["price"]),
+                                ),
+                                leg_b=LegState(
+                                    pair["symbol_b"],
+                                    side_b,
+                                    float(lb["amount"]),
+                                    float(lb["price"]),
+                                    float(lb["price"]),
+                                ),
+                                open_time=datetime.now(timezone.utc).isoformat(),
+                                zscore_at_entry=float(z or 0),
+                                current_zscore=float(z or 0),
+                                direction=direction_from_signal(sig["action"]),
+                            )
+                            RT.pm.set_position(pid, ppos)
+                            dbmod.insert_trade(
+                                conn,
+                                {
+                                    "timestamp": ts,
+                                    "pair_id": pid,
+                                    "action": "OPEN",
+                                    "direction": ppos.direction,
+                                    "symbol_a": pair["symbol_a"],
+                                    "symbol_b": pair["symbol_b"],
+                                    "side_a": side_a,
+                                    "side_b": side_b,
+                                    "qty_a": ppos.leg_a.size,
+                                    "qty_b": ppos.leg_b.size,
+                                    "entry_price_a": ppos.leg_a.entry_price,
+                                    "entry_price_b": ppos.leg_b.entry_price,
+                                    "exit_price_a": None,
+                                    "exit_price_b": None,
+                                    "pnl_usdt": None,
+                                    "zscore_entry": float(z or 0),
+                                    "zscore_exit": None,
+                                    "close_reason": None,
+                                    "dry_run": 1 if bot_cfg.get("dry_run") else 0,
+                                },
+                            )
+                    else:
+                        logger.info("skip open %s: %s", pid, reason)
+    
+                elif sig["action"] == "CLOSE" and RT.pm.has(pid):
+                    pos = RT.pm.get(pid)
+                    reason = "zscore_revert" if "revert" in sig.get("reason", "") else "stop_zscore"
+                    await RT._close_one(pid, pos, reason)
+    
+            RT.warming_up = any_warming
+            RT.ws_metrics.update(metrics_by_pair)
+            await safe_broadcast()
+            await asyncio.sleep(loop_sec)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("stat_arb_bot_loop: итерация — продолжаем")
+            await asyncio.sleep(loop_sec)
 
 
 async def breakout_bot_loop() -> None:
@@ -1050,114 +1075,120 @@ async def breakout_bot_loop() -> None:
     pairs = [p for p in br.get("pairs", []) if p.get("enabled")]
     tf_ms = int(float(ex.parse_timeframe(tf)) * 1000)
     while not RT._shutdown:
-        for pr in pairs:
-            sym = pr["symbol"]
-            await asyncio.sleep(0.2)
-            try:
-                candles = det.get_candles(ex, sym, tf, lookback + 15)
-                if candles.empty or len(candles) < lookback + 2:
-                    continue
-                bar_ts = int(candles.iloc[-1]["timestamp"])
-                close = float(candles.iloc[-1]["close"])
-
-                p0 = tr.get_position(sym)
-                if p0 and p0.status == "PENDING" and p0.pending_order_id and not dry_br:
-                    poll = await om.poll_breakout_limit(sym, p0.pending_order_id, dry_br)
-                    if poll.get("done") and poll.get("filled"):
-                        tr.confirm_open(
-                            sym,
-                            float(poll.get("avg") or 0),
-                            float(poll.get("filled_qty") or 0),
-                        )
-                        logger.info(
-                            "BREAKOUT limit filled %s @ %s qty=%s",
-                            sym,
-                            poll.get("avg"),
-                            poll.get("filled_qty"),
-                        )
-                    elif poll.get("cancelled"):
-                        fq = float(poll.get("filled_qty") or 0)
-                        if fq > 0 and float(poll.get("avg") or 0) > 0:
-                            tr.confirm_open(sym, float(poll["avg"]), fq)
-                            logger.warning("BREAKOUT partial fill after cancel %s", sym)
-                        else:
-                            tr.remove(sym)
-                            logger.info("BREAKOUT limit cancelled (exchange) %s", sym)
-
-                detection = det.detect(candles)
-                RT.breakout_last_signals[sym] = {
-                    "signal": detection.get("signal"),
-                    "volume_ratio": detection.get("volume_ratio"),
-                    "breakout_level": detection.get("breakout_level"),
-                }
-                notional_est = dep * pos_pct
-                ok, _ = (
-                    RT.risk.check_can_open(f"breakout:{sym}", notional_est, legs=1)
-                    if RT.risk
-                    else (True, "")
-                )
-                sig = eng.get_signal(
-                    detection, sym, close, ok, current_bar_ts_ms=bar_ts, tf_ms=tf_ms
-                )
-                if sig["action"] in ("OPEN_LONG", "OPEN_SHORT"):
-                    side = "buy" if sig["action"] == "OPEN_LONG" else "sell"
-                    res = await om.open_breakout_limit(
-                        sym,
-                        side,
-                        sig["position_size_usdt"],
-                        sig["entry_price"],
-                        dry_run_override=dry_br,
-                    )
-                    if res.get("error"):
-                        logger.warning("breakout limit %s: %s", sym, res["error"])
+        try:
+            for pr in pairs:
+                sym = pr["symbol"]
+                await asyncio.sleep(0.2)
+                try:
+                    candles = det.get_candles(ex, sym, tf, lookback + 15)
+                    if candles.empty or len(candles) < lookback + 2:
                         continue
-                    qty_est = float(res.get("amount") or 0)
-                    if dry_br or res.get("filled"):
-                        fill = float(res.get("price") or 0)
-                        tr.confirm_open(sym, fill, qty_est)
-                        logger.info("BREAKOUT OPEN %s %s @ %s (dry/instant)", sym, sig["action"], fill)
-                    else:
-                        oid = str(res.get("order_id") or "")
-                        tr.open_pending(
+                    bar_ts = int(candles.iloc[-1]["timestamp"])
+                    close = float(candles.iloc[-1]["close"])
+    
+                    p0 = tr.get_position(sym)
+                    if p0 and p0.status == "PENDING" and p0.pending_order_id and not dry_br:
+                        poll = await om.poll_breakout_limit(sym, p0.pending_order_id, dry_br)
+                        if poll.get("done") and poll.get("filled"):
+                            tr.confirm_open(
+                                sym,
+                                float(poll.get("avg") or 0),
+                                float(poll.get("filled_qty") or 0),
+                            )
+                            logger.info(
+                                "BREAKOUT limit filled %s @ %s qty=%s",
+                                sym,
+                                poll.get("avg"),
+                                poll.get("filled_qty"),
+                            )
+                        elif poll.get("cancelled"):
+                            fq = float(poll.get("filled_qty") or 0)
+                            if fq > 0 and float(poll.get("avg") or 0) > 0:
+                                tr.confirm_open(sym, float(poll["avg"]), fq)
+                                logger.warning("BREAKOUT partial fill after cancel %s", sym)
+                            else:
+                                tr.remove(sym)
+                                logger.info("BREAKOUT limit cancelled (exchange) %s", sym)
+    
+                    detection = det.detect(candles)
+                    RT.breakout_last_signals[sym] = {
+                        "signal": detection.get("signal"),
+                        "volume_ratio": detection.get("volume_ratio"),
+                        "breakout_level": detection.get("breakout_level"),
+                    }
+                    notional_est = dep * pos_pct
+                    ok, _ = (
+                        RT.risk.check_can_open(f"breakout:{sym}", notional_est, legs=1)
+                        if RT.risk
+                        else (True, "")
+                    )
+                    sig = eng.get_signal(
+                        detection, sym, close, ok, current_bar_ts_ms=bar_ts, tf_ms=tf_ms
+                    )
+                    if sig["action"] in ("OPEN_LONG", "OPEN_SHORT"):
+                        side = "buy" if sig["action"] == "OPEN_LONG" else "sell"
+                        res = await om.open_breakout_limit(
                             sym,
-                            "LONG" if sig["action"] == "OPEN_LONG" else "SHORT",
-                            float(sig["entry_price"]),
-                            float(sig["tp_price"]),
-                            float(sig["sl_price"]),
-                            float(sig["position_size_usdt"]),
-                            qty_est,
-                            time.time() + 7 * 24 * 3600,
-                            oid or None,
-                            placed_bar_ts=bar_ts,
-                        )
-                        logger.info(
-                            "BREAKOUT limit placed %s %s id=%s @ %s",
-                            sym,
-                            sig["action"],
-                            oid,
+                            side,
+                            sig["position_size_usdt"],
                             sig["entry_price"],
+                            dry_run_override=dry_br,
                         )
-                elif sig["action"] in ("CLOSE_TP", "CLOSE_SL"):
-                    p = tr.get_position(sym)
-                    if p and p.status == "OPEN":
-                        await om.close_breakout_market(sym, p.side == "LONG", p.qty)
-                        cr = "TP" if "TP" in sig["action"] else "SL"
-                        rec = tr.close_position(sym, close, cr)
-                        RT._log_breakout_scalp_trade(rec, cr)
-                elif sig["action"] == "CANCEL_PENDING":
-                    p = tr.get_position(sym)
-                    if p and p.pending_order_id:
-                        try:
-                            await om.cancel_breakout_order(sym, p.pending_order_id, dry_br)
-                        except Exception as e:
-                            logger.warning("breakout cancel pending %s: %s", sym, e)
-                    tr.remove(sym)
-                if tr.get_position(sym) and tr.get_position(sym).status == "OPEN":
-                    tr.update_price(sym, close)
-            except Exception as e:
-                logger.exception("breakout %s: %s", sym, e)
-        await safe_broadcast()
-        await asyncio.sleep(loop_sec)
+                        if res.get("error"):
+                            logger.warning("breakout limit %s: %s", sym, res["error"])
+                            continue
+                        qty_est = float(res.get("amount") or 0)
+                        if dry_br or res.get("filled"):
+                            fill = float(res.get("price") or 0)
+                            tr.confirm_open(sym, fill, qty_est)
+                            logger.info("BREAKOUT OPEN %s %s @ %s (dry/instant)", sym, sig["action"], fill)
+                        else:
+                            oid = str(res.get("order_id") or "")
+                            tr.open_pending(
+                                sym,
+                                "LONG" if sig["action"] == "OPEN_LONG" else "SHORT",
+                                float(sig["entry_price"]),
+                                float(sig["tp_price"]),
+                                float(sig["sl_price"]),
+                                float(sig["position_size_usdt"]),
+                                qty_est,
+                                time.time() + 7 * 24 * 3600,
+                                oid or None,
+                                placed_bar_ts=bar_ts,
+                            )
+                            logger.info(
+                                "BREAKOUT limit placed %s %s id=%s @ %s",
+                                sym,
+                                sig["action"],
+                                oid,
+                                sig["entry_price"],
+                            )
+                    elif sig["action"] in ("CLOSE_TP", "CLOSE_SL"):
+                        p = tr.get_position(sym)
+                        if p and p.status == "OPEN":
+                            await om.close_breakout_market(sym, p.side == "LONG", p.qty)
+                            cr = "TP" if "TP" in sig["action"] else "SL"
+                            rec = tr.close_position(sym, close, cr)
+                            RT._log_breakout_scalp_trade(rec, cr)
+                    elif sig["action"] == "CANCEL_PENDING":
+                        p = tr.get_position(sym)
+                        if p and p.pending_order_id:
+                            try:
+                                await om.cancel_breakout_order(sym, p.pending_order_id, dry_br)
+                            except Exception as e:
+                                logger.warning("breakout cancel pending %s: %s", sym, e)
+                        tr.remove(sym)
+                    if tr.get_position(sym) and tr.get_position(sym).status == "OPEN":
+                        tr.update_price(sym, close)
+                except Exception as e:
+                    logger.exception("breakout %s: %s", sym, e)
+            await safe_broadcast()
+            await asyncio.sleep(loop_sec)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("breakout_bot_loop: итерация — продолжаем")
+            await asyncio.sleep(loop_sec)
 
 
 async def ema_scalper_bot_loop() -> None:
@@ -1183,138 +1214,168 @@ async def ema_scalper_bot_loop() -> None:
     tf_ms = int(float(ex.parse_timeframe(tf)) * 1000)
     pairs = [p for p in es.get("pairs", []) if p.get("enabled")]
     while not RT._shutdown:
-        for pr in pairs:
-            sym = pr["symbol"]
-            await asyncio.sleep(0.15)
-            try:
-                raw = await asyncio.to_thread(ex.fetch_ohlcv, sym, tf, None, 80)
-                if not raw or len(raw) < 2:
-                    continue
-                closed = raw[:-1]
-                candles = [
-                    {
-                        "ts": int(x[0]),
-                        "open": float(x[1]),
-                        "high": float(x[2]),
-                        "low": float(x[3]),
-                        "close": float(x[4]),
-                        "volume": float(x[5]),
-                    }
-                    for x in closed
-                ]
-                bar_ts = int(closed[-1][0])
-                RT.ema_current_bar_ts[sym] = bar_ts
-                ema_period = int(ent_cfg.get("ema_period", 9))
-                ind = get_indicators(
-                    candles,
-                    {
-                        **ent_cfg,
-                        "ema_period": ema_period,
-                        "volume_lookback": ent_cfg.get("volume_lookback", 10),
-                    },
-                )
-                closes_all = [c["close"] for c in candles]
-                ema_series = calc_ema(closes_all, ema_period) if len(closes_all) >= ema_period else []
-                slice_c = candles[-50:] if len(candles) > 50 else candles
-                off = len(candles) - len(slice_c)
-                chart_rows: list[dict] = []
-                for j, c in enumerate(slice_c):
-                    idx = off + j
-                    ema_v = ema_series[idx] if idx < len(ema_series) else (
-                        ema_series[-1] if ema_series else c["close"]
-                    )
-                    chart_rows.append(
+        try:
+            for pr in pairs:
+                sym = pr["symbol"]
+                await asyncio.sleep(0.15)
+                try:
+                    raw = await asyncio.to_thread(ex.fetch_ohlcv, sym, tf, None, 80)
+                    if not raw or len(raw) < 2:
+                        continue
+                    closed = raw[:-1]
+                    candles = [
                         {
-                            "ts": c["ts"],
-                            "open": c["open"],
-                            "high": c["high"],
-                            "low": c["low"],
-                            "close": c["close"],
-                            "volume": c["volume"],
-                            "ema": float(ema_v),
+                            "ts": int(x[0]),
+                            "open": float(x[1]),
+                            "high": float(x[2]),
+                            "low": float(x[3]),
+                            "close": float(x[4]),
+                            "volume": float(x[5]),
                         }
+                        for x in closed
+                    ]
+                    bar_ts = int(closed[-1][0])
+                    RT.ema_current_bar_ts[sym] = bar_ts
+                    ema_period = int(ent_cfg.get("ema_period", 9))
+                    ind = get_indicators(
+                        candles,
+                        {
+                            **ent_cfg,
+                            "ema_period": ema_period,
+                            "volume_lookback": ent_cfg.get("volume_lookback", 10),
+                        },
                     )
-                RT.ema_chart_history[sym] = chart_rows
-                if not ind.get("warming_up") and eng:
-                    base_ind = {k: v for k, v in ind.items() if k != "warming_up"}
-                    prev_ui = eng.preview_panel_status(ind)
-                    RT.ema_indicators[sym] = {**base_ind, **prev_ui}
-                elif ind.get("warming_up"):
-                    RT.ema_indicators[sym] = {}
-                ticker = await asyncio.to_thread(ex.fetch_ticker, sym)
-                last = float(ticker["last"] or ticker["close"] or candles[-1]["close"])
-                if sym in RT.ema_positions:
-                    pos = RT.ema_positions[sym]
-                    pos.update(last)
-                    if not ind.get("warming_up"):
-                        x = eng.check_exit(pos, ind, bar_ts)
-                        if x["should_exit"]:
-                            await RT._close_ema_scalp(
-                                sym,
-                                pos,
-                                last,
-                                str(x.get("reason", "EXIT")),
-                                bar_ts_ms=bar_ts,
-                            )
-                    continue
-
-                if RT.ema_last_bar_ts.get(sym) == bar_ts:
-                    continue
-                RT.ema_last_bar_ts[sym] = bar_ts
-                if ind.get("warming_up"):
-                    continue
-                notional = dep * pos_pct
-                ok, _ = RT.risk.check_can_open(f"ema:{sym}", notional, legs=1) if RT.risk else (True, "")
-                entry_sig = eng.check_entry(
-                    ind,
-                    sym,
-                    len(RT.ema_positions),
-                    RT.ema_last_entry_ts.get(sym),
-                    bar_ts,
-                    ok,
-                )
-                if entry_sig["action"] not in ("OPEN_LONG", "OPEN_SHORT"):
-                    continue
-                side_buy = entry_sig["action"] == "OPEN_LONG"
-                order_usdt = notional * lev
-                res = await om.open_scalp_market(
-                    sym, "buy" if side_buy else "sell", order_usdt, dry_run_override=dry_es
-                )
-                if res.get("error"):
-                    continue
-                entry = float(res.get("price") or last)
-                qty = float(res.get("amount") or (notional * lev / max(entry, 1e-12)))
-                side = "LONG" if side_buy else "SHORT"
-                if side == "LONG":
-                    tp_p = entry * (1.0 + tp_pct / 100.0)
-                    sl_p = entry * (1.0 - sl_pct / 100.0)
-                else:
-                    tp_p = entry * (1.0 - tp_pct / 100.0)
-                    sl_p = entry * (1.0 + sl_pct / 100.0)
-                ts_open_iso = datetime.fromtimestamp(bar_ts / 1000.0, tz=timezone.utc).isoformat()
-                RT.ema_positions[sym] = EMAScalpPosition(
-                    symbol=sym,
-                    side=side,
-                    entry_price=entry,
-                    size_usdt=notional,
-                    qty=qty,
-                    leverage=lev,
-                    tp_price=tp_p,
-                    sl_price=sl_p,
-                    max_hold_candles=max_hold,
-                    entry_ts_ms=bar_ts,
-                    tf_ms=tf_ms,
-                    ema_at_entry=float(ind.get("ema_current") or 0.0),
-                    volume_ratio_at_entry=float(ind.get("volume_ratio") or 0.0),
-                    above_ema_count_at_entry=int(ind.get("above_ema_count") or 0),
-                    timestamp_open_iso=ts_open_iso,
-                )
-                RT.ema_last_entry_ts[sym] = bar_ts
-                logger.info("EMA_SCALP OPEN %s %s @ %s", sym, side, entry)
-            except Exception as e:
-                logger.exception("ema_scalper %s: %s", sym, e)
-        await safe_broadcast()
-        await asyncio.sleep(loop_sec)
+                    closes_all = [c["close"] for c in candles]
+                    ema_series = calc_ema(closes_all, ema_period) if len(closes_all) >= ema_period else []
+                    slice_c = candles[-50:] if len(candles) > 50 else candles
+                    off = len(candles) - len(slice_c)
+                    chart_rows: list[dict] = []
+                    for j, c in enumerate(slice_c):
+                        idx = off + j
+                        ema_v = ema_series[idx] if idx < len(ema_series) else (
+                            ema_series[-1] if ema_series else c["close"]
+                        )
+                        chart_rows.append(
+                            {
+                                "ts": c["ts"],
+                                "open": c["open"],
+                                "high": c["high"],
+                                "low": c["low"],
+                                "close": c["close"],
+                                "volume": c["volume"],
+                                "ema": float(ema_v),
+                            }
+                        )
+                    RT.ema_chart_history[sym] = chart_rows
+                    if not ind.get("warming_up") and eng:
+                        base_ind = {k: v for k, v in ind.items() if k != "warming_up"}
+                        prev_ui = eng.preview_panel_status(ind)
+                        RT.ema_indicators[sym] = {**base_ind, **prev_ui}
+                    elif ind.get("warming_up"):
+                        RT.ema_indicators[sym] = {}
+                    ticker = await asyncio.to_thread(ex.fetch_ticker, sym)
+                    last = float(ticker["last"] or ticker["close"] or candles[-1]["close"])
+                    if sym in RT.ema_positions:
+                        pos = RT.ema_positions[sym]
+                        pos.update(last)
+                        if not ind.get("warming_up"):
+                            x = eng.check_exit(pos, ind, bar_ts)
+                            if x["should_exit"]:
+                                await RT._close_ema_scalp(
+                                    sym,
+                                    pos,
+                                    last,
+                                    str(x.get("reason", "EXIT")),
+                                    bar_ts_ms=bar_ts,
+                                )
+                        continue
+    
+                    if RT.ema_last_bar_ts.get(sym) == bar_ts:
+                        continue
+                    RT.ema_last_bar_ts[sym] = bar_ts
+                    if ind.get("warming_up"):
+                        continue
+                    notional = dep * pos_pct
+                    ok, _ = RT.risk.check_can_open(f"ema:{sym}", notional, legs=1) if RT.risk else (True, "")
+                    # Временно: диагностика win rate (убрать после анализа)
+                    logger.info(
+                        "[EMA DEBUG] %s | close=%.2f ema=%.2f | above=%s below=%s | "
+                        "vol_ratio=%.2f is_green=%s is_red=%s",
+                        sym,
+                        float(ind.get("close") or 0.0),
+                        float(ind.get("ema_current") or 0.0),
+                        ind.get("above_ema_count"),
+                        ind.get("below_ema_count"),
+                        float(ind.get("volume_ratio") or 0.0),
+                        ind.get("is_green"),
+                        ind.get("is_red"),
+                    )
+                    entry_sig = eng.check_entry(
+                        ind,
+                        sym,
+                        len(RT.ema_positions),
+                        RT.ema_last_entry_ts.get(sym),
+                        bar_ts,
+                        ok,
+                    )
+                    if entry_sig["action"] not in ("OPEN_LONG", "OPEN_SHORT"):
+                        continue
+                    side_buy = entry_sig["action"] == "OPEN_LONG"
+                    order_usdt = notional * lev
+                    res = await om.open_scalp_market(
+                        sym, "buy" if side_buy else "sell", order_usdt, dry_run_override=dry_es
+                    )
+                    if res.get("error"):
+                        continue
+                    entry = float(res.get("price") or last)
+                    qty = float(res.get("amount") or (notional * lev / max(entry, 1e-12)))
+                    side = "LONG" if side_buy else "SHORT"
+                    if side == "LONG":
+                        tp_p = entry * (1.0 + tp_pct / 100.0)
+                        sl_p = entry * (1.0 - sl_pct / 100.0)
+                    else:
+                        tp_p = entry * (1.0 - tp_pct / 100.0)
+                        sl_p = entry * (1.0 + sl_pct / 100.0)
+                    ts_open_iso = datetime.fromtimestamp(bar_ts / 1000.0, tz=timezone.utc).isoformat()
+                    RT.ema_positions[sym] = EMAScalpPosition(
+                        symbol=sym,
+                        side=side,
+                        entry_price=entry,
+                        size_usdt=notional,
+                        qty=qty,
+                        leverage=lev,
+                        tp_price=tp_p,
+                        sl_price=sl_p,
+                        max_hold_candles=max_hold,
+                        entry_ts_ms=bar_ts,
+                        tf_ms=tf_ms,
+                        ema_at_entry=float(ind.get("ema_current") or 0.0),
+                        volume_ratio_at_entry=float(ind.get("volume_ratio") or 0.0),
+                        above_ema_count_at_entry=int(ind.get("above_ema_count") or 0),
+                        timestamp_open_iso=ts_open_iso,
+                    )
+                    RT.ema_last_entry_ts[sym] = bar_ts
+                    _vr = float(ind.get("volume_ratio") or 0.0)
+                    _aec = int(ind.get("above_ema_count") or 0)
+                    _bec = int(ind.get("below_ema_count") or 0)
+                    logger.info(
+                        "EMA_SCALP OPEN %s %s entry=%.6f above_ema_count=%d below_ema_count=%d volume_ratio=%.4f",
+                        sym,
+                        side,
+                        entry,
+                        _aec,
+                        _bec,
+                        _vr,
+                    )
+                except Exception as e:
+                    logger.exception("ema_scalper %s: %s", sym, e)
+            await safe_broadcast()
+            await asyncio.sleep(loop_sec)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("ema_scalper_bot_loop: итерация — продолжаем")
+            await asyncio.sleep(loop_sec)
 
 
 async def run_all_loops() -> None:

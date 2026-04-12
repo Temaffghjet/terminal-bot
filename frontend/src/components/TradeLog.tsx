@@ -10,6 +10,7 @@ type TradeRow = {
   zscore_exit?: number | null;
   entry_price_a?: number | null;
   exit_price_a?: number | null;
+  qty_a?: number | null;
   pnl_usdt?: number | null;
   close_reason?: string | null;
   dry_run?: number | null;
@@ -17,9 +18,27 @@ type TradeRow = {
 
 type FilterMode = "all" | "open" | "closed" | "dry";
 
-type Props = { trades: TradeRow[] };
+/** Маржа/номинал по политике ema_scalper.risk (не из qty×цена старых записей). */
+export type EmaPolicyDisplay = {
+  marginUsdt: number;
+  nominalUsdt: number;
+  leverage: number;
+};
 
-export default function TradeLog({ trades }: Props) {
+type Props = {
+  trades: TradeRow[];
+  scalpLeverage?: number;
+  emaPolicy?: EmaPolicyDisplay | null;
+};
+
+function scalpNominalUsdt(t: TradeRow): number {
+  const q = Number(t.qty_a ?? 0);
+  const ep = Number(t.entry_price_a ?? 0);
+  if (!q || !ep) return 0;
+  return Math.abs(q * ep);
+}
+
+export default function TradeLog({ trades, scalpLeverage = 5, emaPolicy = null }: Props) {
   const [filter, setFilter] = useState<FilterMode>("all");
   const [sortDesc, setSortDesc] = useState(true);
 
@@ -47,7 +66,12 @@ export default function TradeLog({ trades }: Props) {
   return (
     <div className="border border-gray-800 bg-[#0a0a0f] flex flex-col min-h-[200px]">
       <div className="flex flex-wrap items-center gap-2 px-2 py-1 border-b border-gray-800">
-        <span className="text-xs text-gray-500 uppercase">Trade log</span>
+        <span className="text-xs text-gray-500 uppercase">
+          Trade log{" "}
+          <span className="normal-case text-[10px] text-gray-600 font-normal">
+            (таблица trades; EMA закрытия — в блоке EMA выше)
+          </span>
+        </span>
         <div className="flex gap-1 text-[10px]">
           {(["all", "open", "closed", "dry"] as const).map((f) => (
             <button
@@ -76,6 +100,26 @@ export default function TradeLog({ trades }: Props) {
               <th className="text-left p-1">Pair</th>
               <th className="text-left p-1">Action</th>
               <th className="text-left p-1">Direction</th>
+              <th
+                className="text-right p-1"
+                title={
+                  emaPolicy
+                    ? "EMA: номинал = маржа × плечо (из config ema_scalper.risk)"
+                    : "Скальп: номинал ≈ qty×цена (факт сделки)"
+                }
+              >
+                Номинал
+              </th>
+              <th
+                className="text-right p-1"
+                title={
+                  emaPolicy
+                    ? "EMA: маржа = balance_usdt × position_size_pct / 100"
+                    : "Маржа ≈ номинал / плечо"
+                }
+              >
+                Маржа
+              </th>
               <th className="text-left p-1">Z in → out / цена</th>
               <th className="text-right p-1">P&amp;L</th>
               <th className="text-left p-1">Reason</th>
@@ -92,6 +136,45 @@ export default function TradeLog({ trades }: Props) {
                   {t.action}
                 </td>
                 <td className="p-1">{t.direction}</td>
+                <td className="p-1 text-right text-gray-300 whitespace-nowrap">
+                  {(() => {
+                    const scalp =
+                      (t.pair_id?.startsWith("scalp:") ?? false) ||
+                      String(t.direction ?? "").includes("SCALP");
+                    if (!scalp) return "—";
+                    if (emaPolicy && emaPolicy.nominalUsdt > 0) {
+                      const lev = emaPolicy.leverage || scalpLeverage;
+                      return (
+                        <>
+                          ${emaPolicy.nominalUsdt.toFixed(2)}
+                          <span className="text-gray-600"> x{lev}</span>
+                        </>
+                      );
+                    }
+                    const n = scalpNominalUsdt(t);
+                    if (!(n > 0)) return "—";
+                    return (
+                      <>
+                        ${n.toFixed(2)}
+                        <span className="text-gray-600"> x{scalpLeverage}</span>
+                      </>
+                    );
+                  })()}
+                </td>
+                <td className="p-1 text-right text-amber-200/90 whitespace-nowrap">
+                  {(() => {
+                    const scalp =
+                      (t.pair_id?.startsWith("scalp:") ?? false) ||
+                      String(t.direction ?? "").includes("SCALP");
+                    if (!scalp) return "—";
+                    if (emaPolicy && emaPolicy.marginUsdt > 0) {
+                      return `$${emaPolicy.marginUsdt.toFixed(2)}`;
+                    }
+                    const n = scalpNominalUsdt(t);
+                    if (!(n > 0) || !(scalpLeverage > 0)) return "—";
+                    return `$${(n / scalpLeverage).toFixed(2)}`;
+                  })()}
+                </td>
                 <td className="p-1">
                   {(() => {
                     const scalp =
