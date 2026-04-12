@@ -20,6 +20,8 @@ class EMAScalpPosition:
     ema_at_entry: float = 0.0
     volume_ratio_at_entry: float = 0.0
     above_ema_count_at_entry: int = 0
+    # причина входа из check_entry: ema_long, ema_short, …
+    entry_reason: str = ""
     timestamp_open_iso: str = ""
     candles_held: int = 0
     current_price: float = 0.0
@@ -81,4 +83,5 @@ class EMAScalpPosition:
             "notional_usdt": round(self.notional, 4),
             "progress_to_tp": round(prog, 1),
             "status": self.status,
+            "entry_reason": self.entry_reason or "",
         }

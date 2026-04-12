@@ -314,13 +314,15 @@ class BotRuntime:
                 "ema_at_entry": pos.ema_at_entry,
                 "volume_ratio_at_entry": pos.volume_ratio_at_entry,
                 "above_ema_count_at_entry": pos.above_ema_count_at_entry,
+                "entry_reason": pos.entry_reason or None,
             },
         )
         logger.info(
-            "EMA_SCALP CLOSE %s %s net=%.4f USDT reason=%s (scalp_trades)",
+            "EMA_TRADE CLOSE %s %s net=%.4f USDT entry_reason=%s close_reason=%s (scalp_trades)",
             symbol,
             pos.side,
             net,
+            pos.entry_reason or "",
             reason,
         )
 
@@ -371,6 +373,7 @@ class BotRuntime:
                 "ema_at_entry": 0.0,
                 "volume_ratio_at_entry": 0.0,
                 "above_ema_count_at_entry": 0,
+                "entry_reason": rec.get("entry_reason"),
             },
         )
 
@@ -1314,8 +1317,7 @@ async def ema_scalper_bot_loop() -> None:
                         continue
                     notional = dep * pos_pct
                     ok, _ = RT.risk.check_can_open(f"ema:{sym}", notional, legs=1) if RT.risk else (True, "")
-                    # Временно: диагностика win rate (убрать после анализа)
-                    logger.info(
+                    logger.debug(
                         "[EMA DEBUG] %s | close=%.2f ema=%.2f | above=%s below=%s | "
                         "vol_ratio=%.2f is_green=%s is_red=%s",
                         sym,
@@ -1354,6 +1356,7 @@ async def ema_scalper_bot_loop() -> None:
                         tp_p = entry * (1.0 - tp_pct / 100.0)
                         sl_p = entry * (1.0 + sl_pct / 100.0)
                     ts_open_iso = datetime.fromtimestamp(bar_ts / 1000.0, tz=timezone.utc).isoformat()
+                    entry_reason = str(entry_sig.get("reason") or "")
                     RT.ema_positions[sym] = EMAScalpPosition(
                         symbol=sym,
                         side=side,
@@ -1369,17 +1372,24 @@ async def ema_scalper_bot_loop() -> None:
                         ema_at_entry=float(ind.get("ema_current") or 0.0),
                         volume_ratio_at_entry=float(ind.get("volume_ratio") or 0.0),
                         above_ema_count_at_entry=int(ind.get("above_ema_count") or 0),
+                        entry_reason=entry_reason,
                         timestamp_open_iso=ts_open_iso,
                     )
                     RT.ema_last_entry_ts[sym] = bar_ts
-                    _vr = float(ind.get("volume_ratio") or 0.0)
                     _aec = int(ind.get("above_ema_count") or 0)
                     _bec = int(ind.get("below_ema_count") or 0)
+                    _vr = float(ind.get("volume_ratio") or 0.0)
                     logger.info(
-                        "EMA_SCALP OPEN %s %s entry=%.6f above_ema_count=%d below_ema_count=%d volume_ratio=%.4f",
+                        "EMA_TRADE ENTRY %s %s entry=%.6f entry_reason=%s margin=%.4f lev=%d "
+                        "tp=%.6f sl=%.6f above_ema=%d below_ema=%d vol_ratio=%.4f",
                         sym,
                         side,
                         entry,
+                        entry_reason,
+                        notional,
+                        lev,
+                        tp_p,
+                        sl_p,
                         _aec,
                         _bec,
                         _vr,

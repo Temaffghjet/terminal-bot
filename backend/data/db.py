@@ -77,7 +77,8 @@ CREATE TABLE IF NOT EXISTS scalp_trades (
     dry_run INTEGER DEFAULT 1,
     ema_at_entry REAL,
     volume_ratio_at_entry REAL,
-    above_ema_count_at_entry INTEGER
+    above_ema_count_at_entry INTEGER,
+    entry_reason TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_scalp_symbol ON scalp_trades(symbol);
 CREATE INDEX IF NOT EXISTS idx_scalp_ts ON scalp_trades(timestamp_open);
@@ -85,6 +86,16 @@ CREATE INDEX IF NOT EXISTS idx_scalp_strategy ON scalp_trades(strategy);
 """
     )
     conn.commit()
+    _migrate_scalp_entry_reason(conn)
+
+
+def _migrate_scalp_entry_reason(conn: sqlite3.Connection) -> None:
+    """Старые БД без колонки entry_reason."""
+    try:
+        conn.execute("ALTER TABLE scalp_trades ADD COLUMN entry_reason TEXT")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass
 
 
 def insert_trade(conn: sqlite3.Connection, row: dict[str, Any]) -> int:
@@ -206,6 +217,7 @@ def insert_scalp_trade(conn: sqlite3.Connection, row: dict[str, Any]) -> int:
         "ema_at_entry",
         "volume_ratio_at_entry",
         "above_ema_count_at_entry",
+        "entry_reason",
     ]
     placeholders = ",".join("?" * len(cols))
     values = [row.get(c) for c in cols]
