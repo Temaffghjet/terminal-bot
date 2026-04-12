@@ -33,7 +33,7 @@ from backend.strategy.breakout import (
     BreakoutSignalEngine,
 )
 from backend.strategy.ema_scalper import EMAScalpPosition, EMAScalpSignalEngine, get_indicators
-from backend.strategy.ema_scalper.indicators import calc_ema
+from backend.strategy.ema_scalper.indicators import calc_ema, higher_tf_trend_from_closes
 from backend.strategy.micro_signals import MicroSignalEngine
 from backend.strategy.position_manager import LegState, PairPosition, PositionManager, ScalpPosition
 from backend.strategy.risk import RiskManager
@@ -1266,6 +1266,26 @@ async def ema_scalper_bot_loop() -> None:
                             "volume_lookback": ent_cfg.get("volume_lookback", 10),
                         },
                     )
+                    if not ind.get("warming_up"):
+                        higher_tf = str(ent_cfg.get("higher_tf", "15m"))
+                        ht_ema_pd = int(ent_cfg.get("higher_tf_ema_period", ema_period))
+                        try:
+                            raw_htf = await asyncio.wait_for(
+                                asyncio.to_thread(ex.fetch_ohlcv, sym, higher_tf, None, 25),
+                                timeout=75.0,
+                            )
+                        except (asyncio.TimeoutError, Exception) as e:
+                            logger.warning(
+                                "EMA %s: fetch_ohlcv higher_tf %s: %s", sym, higher_tf, e
+                            )
+                            raw_htf = None
+                        if raw_htf and len(raw_htf) >= 2:
+                            closes_htf = [float(x[4]) for x in raw_htf[:-1]]
+                            ind["higher_tf_trend"] = higher_tf_trend_from_closes(
+                                closes_htf, ht_ema_pd
+                            )
+                        else:
+                            ind["higher_tf_trend"] = None
                     closes_all = [c["close"] for c in candles]
                     ema_series = calc_ema(closes_all, ema_period) if len(closes_all) >= ema_period else []
                     slice_c = candles[-50:] if len(candles) > 50 else candles

@@ -44,9 +44,15 @@ ema_scalper:
     volume_lookback: 10
     volume_multiplier: 1.5
     min_candles_above_below: 3
+    min_candle_body_pct: 0.05
     no_trade_hours_utc: [2, 3, 4]
     min_volume_usdt: 500000
     cooldown_candles: 4
+    higher_tf: "15m"
+    higher_tf_ema_period: 9
+    rsi_period: 14
+    rsi_long_max: 65
+    rsi_short_min: 35
   exit:
     take_profit_pct: 1.5
     stop_loss_pct: 0.5
