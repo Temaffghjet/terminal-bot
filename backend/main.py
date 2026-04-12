@@ -38,6 +38,7 @@ from backend.strategy.risk import RiskManager
 from backend.strategy.signals import SignalEngine
 from backend.strategy.spread import get_all_metrics
 from backend.ws_server import WsHub, run_ws_server
+from websockets.exceptions import ConnectionClosed
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
@@ -100,6 +101,7 @@ class BotRuntime:
         self._shutdown = False
         self._shutdown_event: asyncio.Event | None = None
         self.ws_task: asyncio.Task | None = None
+        self._strategy_tasks: list[asyncio.Task] = []
         self._bal_fetch_ts: float = 0.0
         self._bal_fetch_data: dict | None = None
 
@@ -1423,23 +1425,43 @@ async def run_all_loops() -> None:
         while not RT._shutdown:
             await asyncio.sleep(5)
         return
-    await asyncio.gather(*tasks)
+    RT._strategy_tasks = tasks
+    try:
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+    finally:
+        RT._strategy_tasks = []
+    for r in results:
+        if isinstance(r, asyncio.CancelledError):
+            continue
+        if isinstance(r, BaseException):
+            raise r
 
 
 async def bot_loop() -> None:
     await run_all_loops()
 
 
+def _cancel_strategy_tasks() -> None:
+    for t in RT._strategy_tasks:
+        if not t.done():
+            t.cancel()
+
+
 def _on_sig(*_a) -> None:
     RT._shutdown = True
     RT.bot_status = "stopped"
-    ev = RT._shutdown_event
-    if ev is not None:
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            return
-        loop.call_soon_threadsafe(ev.set)
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+
+    def _go() -> None:
+        _cancel_strategy_tasks()
+        ev = RT._shutdown_event
+        if ev is not None:
+            ev.set()
+
+    loop.call_soon_threadsafe(_go)
 
 
 def _parse_ccxt_position_row(p: dict) -> dict | None:
@@ -1614,7 +1636,25 @@ async def sync_positions_on_startup() -> None:
             )
 
 
+def _install_asyncio_connection_closed_filter() -> None:
+    """Не спамить журнал traceback при обрыве WS без close frame (внутренние задачи websockets)."""
+    loop = asyncio.get_running_loop()
+    default = loop.get_exception_handler()
+
+    def _handler(l: asyncio.AbstractEventLoop, context: dict) -> None:
+        exc = context.get("exception")
+        if isinstance(exc, ConnectionClosed):
+            return
+        if default is not None:
+            default(l, context)
+        else:
+            l.default_exception_handler(context)
+
+    loop.set_exception_handler(_handler)
+
+
 async def main_async() -> None:
+    _install_asyncio_connection_closed_filter()
     RT.config = load_config()
     RT.env = get_env()
     RT.exchange = create_exchange(RT.config, RT.env)

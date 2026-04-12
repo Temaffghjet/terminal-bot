@@ -49,7 +49,7 @@ class WsHub:
             for ws in self._clients.copy():
                 try:
                     await ws.send(raw)
-                except ConnectionClosed:
+                except (ConnectionClosed, OSError):
                     dead.append(ws)
                 except Exception as e:
                     logger.error("[WS] broadcast error: %s", e)
@@ -102,6 +102,8 @@ async def run_ws_server(
                     await hub.handle_message(message)
             except ConnectionClosed:
                 pass  # обрыв без close frame / reconnect — не ошибка
+            except OSError:
+                pass  # broken pipe / reset
             except Exception as e:
                 logger.error("[WS] handler error: %s", e)
         finally:
