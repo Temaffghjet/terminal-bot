@@ -14,6 +14,36 @@ def calc_ema(closes: list[float], period: int) -> list[float]:
     return ema
 
 
+def calc_momentum(candles: list[dict[str, Any]], ema: list[float]) -> dict[str, Any]:
+    """
+    Проверяет, что последняя свеча удаляется от EMA, а не приближается к ней.
+
+    momentum_long: close выше EMA, расстояние до EMA растёт, последняя свеча выше предыдущей.
+    momentum_short: зеркально для шорта.
+    """
+    if len(candles) < 2 or len(ema) < 2:
+        return {
+            "momentum_long": False,
+            "momentum_short": False,
+            "distance_from_ema": 0.0,
+            "distance_change": 0.0,
+        }
+    c1 = float(candles[-1]["close"])
+    c2 = float(candles[-2]["close"])
+    e1 = float(ema[-1])
+    e2 = float(ema[-2])
+
+    momentum_long = (c1 > e1) and ((c1 - e1) > (c2 - e2)) and (c1 > c2)
+    momentum_short = (c1 < e1) and ((e1 - c1) > (e2 - c2)) and (c1 < c2)
+
+    return {
+        "momentum_long": momentum_long,
+        "momentum_short": momentum_short,
+        "distance_from_ema": abs(c1 - e1),
+        "distance_change": (c1 - e1) - (c2 - e2),
+    }
+
+
 def get_indicators(candles: list[dict[str, Any]], entry_cfg: dict[str, Any]) -> dict[str, Any]:
     ema_period = int(entry_cfg.get("ema_period", 9))
     vol_lb = int(entry_cfg.get("volume_lookback", 10))
@@ -52,7 +82,8 @@ def get_indicators(candles: list[dict[str, Any]], entry_cfg: dict[str, Any]) -> 
     last = candles[-1]
     close = float(last["close"])
     open_ = float(last["open"])
-    return {
+    momentum = calc_momentum(candles, ema)
+    result: dict[str, Any] = {
         "warming_up": False,
         "ema_current": float(ema[-1]),
         "close": close,
@@ -66,3 +97,5 @@ def get_indicators(candles: list[dict[str, Any]], entry_cfg: dict[str, Any]) -> 
         "is_red": close < open_,
         "quote_volume_usdt": close * vol_c,
     }
+    result.update(momentum)
+    return result

@@ -14,15 +14,15 @@ class EMAScalpSignalEngine:
         ex = self.cfg.get("exit") or {}
         rk = self.cfg.get("risk") or {}
         self.ema_period = int(ent.get("ema_period", 9))
-        self.vol_mult = float(ent.get("volume_multiplier", 1.2))
-        self.min_streak = int(ent.get("min_candles_above_below", 2))
+        self.vol_mult = float(ent.get("volume_multiplier", 1.5))
+        self.min_streak = int(ent.get("min_candles_above_below", 3))
         self.no_trade_hours = list(ent.get("no_trade_hours_utc") or [])
         self.min_quote_vol = float(ent.get("min_volume_usdt", 0))
-        self.cooldown_candles = int(ent.get("cooldown_candles", 2))
+        self.cooldown_candles = int(ent.get("cooldown_candles", 4))
         self.tp_pct = float(ex.get("take_profit_pct", 1.5))
         self.sl_pct = float(ex.get("stop_loss_pct", 0.5))
-        self.max_hold = int(ex.get("max_hold_candles", 12))
-        self.ema_cross_exit = bool(ex.get("ema_cross_exit", True))
+        self.max_hold = int(ex.get("max_hold_candles", 8))
+        self.ema_cross_exit = bool(ex.get("ema_cross_exit", False))
         self.tf_sec = self._tf_seconds(self.cfg.get("timeframe", "5m"))
         self.max_open = int(rk.get("max_open_positions", 2))
         self.cooldown_ms = self.cooldown_candles * self.tf_sec * 1000
@@ -64,9 +64,21 @@ class EMAScalpSignalEngine:
 
         ema = float(ind["ema_current"])
         close = float(ind["close"])
-        if close > ema and int(ind["above_ema_count"]) >= self.min_streak and ind.get("is_green"):
+        mom_long = bool(ind.get("momentum_long"))
+        mom_short = bool(ind.get("momentum_short"))
+        if (
+            close > ema
+            and int(ind["above_ema_count"]) >= self.min_streak
+            and ind.get("is_green")
+            and mom_long
+        ):
             return {"action": "OPEN_LONG", "reason": "ema_long", "indicators": ind}
-        if close < ema and int(ind["below_ema_count"]) >= self.min_streak and ind.get("is_red"):
+        if (
+            close < ema
+            and int(ind["below_ema_count"]) >= self.min_streak
+            and ind.get("is_red")
+            and mom_short
+        ):
             return {"action": "OPEN_SHORT", "reason": "ema_short", "indicators": ind}
         return {"action": "HOLD", "reason": "no_setup", "indicators": ind}
 
@@ -107,8 +119,18 @@ class EMAScalpSignalEngine:
             return {"signal_ready": False, "side_ready": None, "reason": "volume_filter"}
         ema = float(ind["ema_current"])
         close = float(ind["close"])
-        if close > ema and int(ind["above_ema_count"]) >= self.min_streak and ind.get("is_green"):
+        if (
+            close > ema
+            and int(ind["above_ema_count"]) >= self.min_streak
+            and ind.get("is_green")
+            and ind.get("momentum_long")
+        ):
             return {"signal_ready": True, "side_ready": "LONG", "reason": "long_setup"}
-        if close < ema and int(ind["below_ema_count"]) >= self.min_streak and ind.get("is_red"):
+        if (
+            close < ema
+            and int(ind["below_ema_count"]) >= self.min_streak
+            and ind.get("is_red")
+            and ind.get("momentum_short")
+        ):
             return {"signal_ready": True, "side_ready": "SHORT", "reason": "short_setup"}
         return {"signal_ready": False, "side_ready": None, "reason": "no_setup"}
