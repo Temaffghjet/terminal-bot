@@ -8,7 +8,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 import websockets
-from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
+from websockets.exceptions import ConnectionClosed
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +49,7 @@ class WsHub:
             for ws in self._clients.copy():
                 try:
                     await ws.send(raw)
-                except (ConnectionClosedError, ConnectionClosedOK):
+                except ConnectionClosed:
                     dead.append(ws)
                 except Exception as e:
                     logger.error("[WS] broadcast error: %s", e)
@@ -100,8 +100,8 @@ async def run_ws_server(
                     if isinstance(message, bytes):
                         message = message.decode("utf-8")
                     await hub.handle_message(message)
-            except (ConnectionClosedError, ConnectionClosedOK):
-                pass  # нормальный обрыв / reconnect фронта
+            except ConnectionClosed:
+                pass  # обрыв без close frame / reconnect — не ошибка
             except Exception as e:
                 logger.error("[WS] handler error: %s", e)
         finally:
