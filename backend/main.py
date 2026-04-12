@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import signal
 import sys
 import time
+from dataclasses import asdict
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
@@ -292,41 +294,45 @@ class BotRuntime:
         bms = bar_ts_ms if bar_ts_ms is not None else int(time.time() * 1000)
         bars = pos.bars_held(bms)
         pnl_pct_row = (net / max(pos.notional, 1e-12)) * 100.0
-        dbmod.insert_scalp_trade(
-            self.conn,
-            {
-                "timestamp_open": pos.timestamp_open_iso or ts_close,
-                "timestamp_close": ts_close,
-                "symbol": symbol,
-                "strategy": "ema_scalper",
-                "side": pos.side,
-                "entry_price": entry,
-                "exit_price": exit_px,
-                "tp_price": pos.tp_price,
-                "sl_price": pos.sl_price,
-                "size_usdt": pos.size_usdt,
-                "notional": pos.notional,
-                "leverage": pos.leverage,
-                "candles_held": bars,
-                "pnl_usdt": net,
-                "pnl_pct": pnl_pct_row,
-                "fee_usdt": fee,
-                "close_reason": reason,
-                "dry_run": 1 if dry_e else 0,
-                "ema_at_entry": pos.ema_at_entry,
-                "volume_ratio_at_entry": pos.volume_ratio_at_entry,
-                "above_ema_count_at_entry": pos.above_ema_count_at_entry,
-                "entry_reason": pos.entry_reason or None,
-            },
-        )
-        logger.info(
-            "EMA_TRADE CLOSE %s %s net=%.4f USDT entry_reason=%s close_reason=%s (scalp_trades)",
-            symbol,
-            pos.side,
-            net,
-            pos.entry_reason or "",
-            reason,
-        )
+        try:
+            dbmod.insert_scalp_trade(
+                self.conn,
+                {
+                    "timestamp_open": pos.timestamp_open_iso or ts_close,
+                    "timestamp_close": ts_close,
+                    "symbol": symbol,
+                    "strategy": "ema_scalper",
+                    "side": pos.side,
+                    "entry_price": entry,
+                    "exit_price": exit_px,
+                    "tp_price": pos.tp_price,
+                    "sl_price": pos.sl_price,
+                    "size_usdt": pos.size_usdt,
+                    "notional": pos.notional,
+                    "leverage": pos.leverage,
+                    "candles_held": bars,
+                    "pnl_usdt": net,
+                    "pnl_pct": pnl_pct_row,
+                    "fee_usdt": fee,
+                    "close_reason": reason,
+                    "dry_run": 1 if dry_e else 0,
+                    "ema_at_entry": pos.ema_at_entry,
+                    "volume_ratio_at_entry": pos.volume_ratio_at_entry,
+                    "above_ema_count_at_entry": pos.above_ema_count_at_entry,
+                    "entry_reason": pos.entry_reason or None,
+                },
+            )
+            logger.info(
+                "EMA_TRADE CLOSE %s %s net=%.4f USDT entry_reason=%s close_reason=%s (scalp_trades)",
+                symbol,
+                pos.side,
+                net,
+                pos.entry_reason or "",
+                reason,
+            )
+        finally:
+            if dry_e and self.conn:
+                dbmod.delete_ema_sim_open(self.conn, symbol)
 
     def _log_breakout_scalp_trade(self, rec: dict, reason: str) -> None:
         """Запись закрытия breakout в scalp_trades (не stat-arb trades)."""
@@ -1378,6 +1384,8 @@ async def ema_scalper_bot_loop() -> None:
                         timestamp_open_iso=ts_open_iso,
                     )
                     RT.ema_last_entry_ts[sym] = bar_ts
+                    if dry_es and RT.conn:
+                        dbmod.upsert_ema_sim_open(RT.conn, asdict(RT.ema_positions[sym]))
                     _aec = int(ind.get("above_ema_count") or 0)
                     _bec = int(ind.get("below_ema_count") or 0)
                     _vr = float(ind.get("volume_ratio") or 0.0)
@@ -1636,6 +1644,36 @@ async def sync_positions_on_startup() -> None:
             )
 
 
+def restore_ema_dry_positions_from_db() -> None:
+    """
+    Открытые EMA в dry-run живут только в RAM; при перезапуске бота восстанавливаем из ema_sim_open.
+    Реальные позиции подтягиваются с биржи в sync_positions_on_startup.
+    """
+    cfg = RT.config
+    es = cfg.get("ema_scalper") or {}
+    if not es.get("enabled"):
+        return
+    dry_es = bool(es.get("dry_run", (cfg.get("bot") or {}).get("dry_run", True)))
+    if not dry_es or not RT.conn:
+        return
+    for row in dbmod.load_all_ema_sim_open(RT.conn):
+        sym = row["symbol"]
+        if sym in RT.ema_positions:
+            continue
+        try:
+            data = json.loads(row["payload_json"])
+            RT.ema_positions[sym] = EMAScalpPosition(**data)
+            RT.ema_last_entry_ts[sym] = int(data.get("entry_ts_ms") or 0)
+            logger.info(
+                "Восстановлена EMA dry-run из БД: %s %s entry=%.4f",
+                sym,
+                data.get("side"),
+                float(data.get("entry_price") or 0.0),
+            )
+        except Exception as e:
+            logger.warning("ema_sim_open restore %s: %s", sym, e)
+
+
 def _install_asyncio_connection_closed_filter() -> None:
     """Не спамить журнал traceback при обрыве WS без close frame (внутренние задачи websockets)."""
     loop = asyncio.get_running_loop()
@@ -1750,6 +1788,7 @@ async def main_async() -> None:
                 logger.warning("ema_scalper set_leverage %s: %s", p["symbol"], e)
 
     await sync_positions_on_startup()
+    restore_ema_dry_positions_from_db()
 
     async def on_pause() -> None:
         RT.set_pause(True)

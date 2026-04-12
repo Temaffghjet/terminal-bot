@@ -83,6 +83,11 @@ CREATE TABLE IF NOT EXISTS scalp_trades (
 CREATE INDEX IF NOT EXISTS idx_scalp_symbol ON scalp_trades(symbol);
 CREATE INDEX IF NOT EXISTS idx_scalp_ts ON scalp_trades(timestamp_open);
 CREATE INDEX IF NOT EXISTS idx_scalp_strategy ON scalp_trades(strategy);
+-- открытые позиции EMA в dry-run (память процесса → переживают restart)
+CREATE TABLE IF NOT EXISTS ema_sim_open (
+    symbol TEXT PRIMARY KEY NOT NULL,
+    payload_json TEXT NOT NULL
+);
 """
     )
     conn.commit()
@@ -96,6 +101,33 @@ def _migrate_scalp_entry_reason(conn: sqlite3.Connection) -> None:
         conn.commit()
     except sqlite3.OperationalError:
         pass
+
+
+def upsert_ema_sim_open(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
+    """Сохранить открытую EMA dry-run позицию (JSON полей EMAScalpPosition)."""
+    import json
+
+    sym = str(payload.get("symbol") or "")
+    if not sym:
+        return
+    conn.execute(
+        """
+        INSERT INTO ema_sim_open (symbol, payload_json) VALUES (?, ?)
+        ON CONFLICT(symbol) DO UPDATE SET payload_json = excluded.payload_json
+        """,
+        (sym, json.dumps(payload, default=str)),
+    )
+    conn.commit()
+
+
+def delete_ema_sim_open(conn: sqlite3.Connection, symbol: str) -> None:
+    conn.execute("DELETE FROM ema_sim_open WHERE symbol = ?", (symbol,))
+    conn.commit()
+
+
+def load_all_ema_sim_open(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    cur = conn.execute("SELECT symbol, payload_json FROM ema_sim_open")
+    return [{"symbol": str(r[0]), "payload_json": str(r[1])} for r in cur.fetchall()]
 
 
 def insert_trade(conn: sqlite3.Connection, row: dict[str, Any]) -> int:
