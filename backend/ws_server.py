@@ -90,6 +90,7 @@ class WsHub:
 async def run_ws_server(
     port: int,
     hub: WsHub,
+    shutdown_event: asyncio.Event,
 ) -> None:
     async def handler(ws: Any) -> None:
         await hub.register(ws)
@@ -107,4 +108,5 @@ async def run_ws_server(
             await hub.unregister(ws)
 
     async with websockets.serve(handler, "0.0.0.0", port):
-        await asyncio.Future()
+        # SIGTERM выставляет event → быстрый выход из serve (не asyncio.Future()).
+        await shutdown_event.wait()

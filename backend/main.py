@@ -98,6 +98,7 @@ class BotRuntime:
         self.ema_indicators: dict[str, dict] = {}
         self.ema_chart_history: dict[str, list[dict]] = {}
         self._shutdown = False
+        self._shutdown_event: asyncio.Event | None = None
         self.ws_task: asyncio.Task | None = None
         self._bal_fetch_ts: float = 0.0
         self._bal_fetch_data: dict | None = None
@@ -1216,10 +1217,19 @@ async def ema_scalper_bot_loop() -> None:
     while not RT._shutdown:
         try:
             for pr in pairs:
+                if RT._shutdown:
+                    break
                 sym = pr["symbol"]
                 await asyncio.sleep(0.15)
                 try:
-                    raw = await asyncio.to_thread(ex.fetch_ohlcv, sym, tf, None, 80)
+                    try:
+                        raw = await asyncio.wait_for(
+                            asyncio.to_thread(ex.fetch_ohlcv, sym, tf, None, 80),
+                            timeout=75.0,
+                        )
+                    except asyncio.TimeoutError:
+                        logger.warning("EMA %s: fetch_ohlcv timeout — пропуск бара", sym)
+                        continue
                     if not raw or len(raw) < 2:
                         continue
                     closed = raw[:-1]
@@ -1273,7 +1283,14 @@ async def ema_scalper_bot_loop() -> None:
                         RT.ema_indicators[sym] = {**base_ind, **prev_ui}
                     elif ind.get("warming_up"):
                         RT.ema_indicators[sym] = {}
-                    ticker = await asyncio.to_thread(ex.fetch_ticker, sym)
+                    try:
+                        ticker = await asyncio.wait_for(
+                            asyncio.to_thread(ex.fetch_ticker, sym),
+                            timeout=35.0,
+                        )
+                    except asyncio.TimeoutError:
+                        logger.warning("EMA %s: fetch_ticker timeout — пропуск бара", sym)
+                        continue
                     last = float(ticker["last"] or ticker["close"] or candles[-1]["close"])
                     if sym in RT.ema_positions:
                         pos = RT.ema_positions[sym]
@@ -1406,6 +1423,13 @@ async def bot_loop() -> None:
 def _on_sig(*_a) -> None:
     RT._shutdown = True
     RT.bot_status = "stopped"
+    ev = RT._shutdown_event
+    if ev is not None:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        loop.call_soon_threadsafe(ev.set)
 
 
 def _parse_ccxt_position_row(p: dict) -> dict | None:
@@ -1705,7 +1729,8 @@ async def main_async() -> None:
     )
     port = int(RT.env.get("WS_PORT", 8765))
 
-    RT.ws_task = asyncio.create_task(run_ws_server(port, RT.hub))
+    RT._shutdown_event = asyncio.Event()
+    RT.ws_task = asyncio.create_task(run_ws_server(port, RT.hub, RT._shutdown_event))
     await asyncio.sleep(0.5)
 
     for sig_name in (signal.SIGINT, signal.SIGTERM):
@@ -1721,6 +1746,22 @@ async def main_async() -> None:
     except Exception:
         logger.exception("bot_loop остановлен из-за ошибки")
         raise
+    finally:
+        RT._shutdown = True
+        if RT._shutdown_event is not None and not RT._shutdown_event.is_set():
+            RT._shutdown_event.set()
+        if RT.ws_task is not None and not RT.ws_task.done():
+            try:
+                await asyncio.wait_for(RT.ws_task, timeout=25.0)
+            except asyncio.TimeoutError:
+                logger.warning("WS server: ожидание завершения истекло — cancel")
+                RT.ws_task.cancel()
+                try:
+                    await RT.ws_task
+                except asyncio.CancelledError:
+                    pass
+            except asyncio.CancelledError:
+                pass
 
 
 def main() -> None:
