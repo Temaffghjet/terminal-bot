@@ -1,3 +1,5 @@
+import { emaEntryReasonHasMappedLabel, formatEmaEntryReason } from "./emaEntryReason";
+
 type Row = Record<string, unknown>;
 
 const reasonClass: Record<string, string> = {
@@ -29,14 +31,18 @@ export default function EMATradeLog({ trades }: { trades: Row[] }) {
               <th className="p-1 text-right" title="Маржа (реальные деньги на счёте)">
                 Маржа
               </th>
-              <th className="p-1">Вход</th>
-              <th className="p-1">Выход</th>
+              <th className="p-1" title="Цена входа">
+                Цена вх.
+              </th>
+              <th className="p-1" title="Цена выхода">
+                Цена вых.
+              </th>
               <th className="p-1">Свечей</th>
-              <th className="p-1" title="Сигнал стратегии при входе">
-                Вход
+              <th className="p-1 min-w-[6rem]" title="Сигнал стратегии (код из бота)">
+                Причина входа
               </th>
               <th className="p-1" title="Причина закрытия">
-                Выход
+                Закрытие
               </th>
               <th className="p-1">P&amp;L $</th>
               <th className="p-1">P&amp;L %</th>
@@ -46,7 +52,9 @@ export default function EMATradeLog({ trades }: { trades: Row[] }) {
             {trades.map((t) => {
               const closeReason = String(t.close_reason ?? "");
               const rc = reasonClass[closeReason] ?? "bg-gray-800 text-gray-300";
-              const entryReason = String(t.entry_reason ?? "").trim();
+              const entryReasonRaw = String(t.entry_reason ?? "").trim();
+              const entryReasonLabel = formatEmaEntryReason(entryReasonRaw);
+              const showEntryCode = entryReasonRaw && emaEntryReasonHasMappedLabel(entryReasonRaw);
               const lev = Math.max(1, Number(t.leverage ?? 1));
               const margin = Number(t.size_usdt ?? 0);
               let notion = Number(t.notional ?? 0);
@@ -70,8 +78,14 @@ export default function EMATradeLog({ trades }: { trades: Row[] }) {
                   <td className="p-1">{Number(t.entry_price ?? 0).toFixed(2)}</td>
                   <td className="p-1">{Number(t.exit_price ?? 0).toFixed(2)}</td>
                   <td className="p-1">{String(t.candles_held ?? "")}</td>
-                  <td className="p-1 font-mono text-gray-300 max-w-[7rem] truncate" title={entryReason || "—"}>
-                    {entryReason || "—"}
+                  <td
+                    className="p-1 text-gray-200 max-w-[9rem]"
+                    title={entryReasonRaw ? `${entryReasonLabel}${showEntryCode ? ` · ${entryReasonRaw}` : ""}` : "—"}
+                  >
+                    <span className="font-medium text-emerald-200/90">{entryReasonLabel}</span>
+                    {showEntryCode ? (
+                      <span className="block text-[9px] text-gray-500 font-mono truncate">{entryReasonRaw}</span>
+                    ) : null}
                   </td>
                   <td className="p-1">
                     <span className={`px-1 rounded ${rc}`}>{closeReason}</span>

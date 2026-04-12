@@ -1,3 +1,5 @@
+import { formatEmaEntryReason } from "./emaEntryReason";
+
 type Pos = {
   symbol: string;
   side: string;
@@ -15,6 +17,8 @@ type Pos = {
   /** номинал позиции с плечом */
   notional_usdt?: number;
   progress_to_tp?: number;
+  /** код причины входа (ema_long / ema_short / …) */
+  entry_reason?: string;
 };
 
 function progressToTp(p: Pos): number {
@@ -62,6 +66,8 @@ export default function EMAPositionCard({
         if (!(notion > 0) && margin > 0) {
           notion = margin * lev;
         }
+        const er = String(p.entry_reason ?? "").trim();
+        const erLabel = formatEmaEntryReason(er);
         return (
           <div
             key={p.symbol}
@@ -91,6 +97,16 @@ export default function EMAPositionCard({
             <div className="mb-2">
               Вход: ${p.entry_price.toFixed(2)} → Сейчас: ${p.current_price.toFixed(2)}
             </div>
+            {er ? (
+              <div
+                className="mb-2 text-[10px] text-gray-400 border-l-2 border-emerald-700/60 pl-2"
+                title={`Код: ${er}`}
+              >
+                <span className="text-gray-500">Причина входа: </span>
+                <span className="text-emerald-200/90 font-medium">{erLabel}</span>
+                <span className="ml-1 font-mono text-gray-500">({er})</span>
+              </div>
+            ) : null}
             <div className="flex justify-between text-[10px] text-gray-500 mb-1">
               <span>SL ${p.sl_price.toFixed(2)}</span>
               <span className={pnlOk ? "text-emerald-400" : "text-rose-400"}>
