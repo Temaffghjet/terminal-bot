@@ -30,6 +30,24 @@ class EMAScalpSignalEngine:
         self.min_candle_body_pct = float(ent.get("min_candle_body_pct", 0.05))
         self.rsi_long_max = float(ent.get("rsi_long_max", 65))
         self.rsi_short_min = float(ent.get("rsi_short_min", 35))
+        # strict = расширение дистанции до EMA (агрессивно, часто поздно); loose = тело+направление
+        self.momentum_mode = str(ent.get("momentum_mode", "strict")).strip().lower()
+        # 0 = выкл.; иначе не входить, если цена слишком далеко от EMA на 5m (% от цены)
+        self.entry_max_dist_ema_pct = float(ent.get("entry_max_distance_from_ema_pct", 0) or 0)
+
+    def _momentum_long_ok(self, ind: dict[str, Any]) -> bool:
+        if self.momentum_mode in ("off", "false", "0", "none"):
+            return True
+        if self.momentum_mode == "loose":
+            return bool(ind.get("momentum_long_loose"))
+        return bool(ind.get("momentum_long"))
+
+    def _momentum_short_ok(self, ind: dict[str, Any]) -> bool:
+        if self.momentum_mode in ("off", "false", "0", "none"):
+            return True
+        if self.momentum_mode == "loose":
+            return bool(ind.get("momentum_short_loose"))
+        return bool(ind.get("momentum_short"))
 
     def _tf_seconds(self, tf: str) -> int:
         if tf.endswith("m"):
@@ -70,8 +88,6 @@ class EMAScalpSignalEngine:
         close = float(ind["close"])
         ae = int(ind["above_ema_count"])
         be = int(ind["below_ema_count"])
-        mom_long = bool(ind.get("momentum_long"))
-        mom_short = bool(ind.get("momentum_short"))
         rsi = float(ind.get("rsi", 50.0))
         body_pct = float(ind.get("candle_body_pct", 0.0))
         ht = ind.get("higher_tf_trend")
@@ -90,17 +106,27 @@ class EMAScalpSignalEngine:
         if close < ema and be > self.max_streak:
             return {"action": "HOLD", "reason": "ema_overextended", "indicators": ind}
 
+        if self.entry_max_dist_ema_pct > 0:
+            if close > ema:
+                dist_pct = (close - ema) / max(ema, 1e-12) * 100.0
+                if dist_pct > self.entry_max_dist_ema_pct:
+                    return {"action": "HOLD", "reason": "ema_stretched", "indicators": ind}
+            elif close < ema:
+                dist_pct = (ema - close) / max(ema, 1e-12) * 100.0
+                if dist_pct > self.entry_max_dist_ema_pct:
+                    return {"action": "HOLD", "reason": "ema_stretched", "indicators": ind}
+
         long_setup = (
             close > ema
             and ae >= self.min_streak
             and ind.get("is_green")
-            and mom_long
+            and self._momentum_long_ok(ind)
         )
         short_setup = (
             close < ema
             and be >= self.min_streak
             and ind.get("is_red")
-            and mom_short
+            and self._momentum_short_ok(ind)
         )
 
         if long_setup:
@@ -161,9 +187,6 @@ class EMAScalpSignalEngine:
         rsi = float(ind.get("rsi", 50.0))
         body_pct = float(ind.get("candle_body_pct", 0.0))
         ht = ind.get("higher_tf_trend")
-        mom_long = bool(ind.get("momentum_long"))
-        mom_short = bool(ind.get("momentum_short"))
-
         if ht is None:
             return {"signal_ready": False, "side_ready": None, "reason": "higher_tf_unavailable"}
         if close > ema and ht != "UP":
@@ -175,17 +198,27 @@ class EMAScalpSignalEngine:
         if close < ema and be > self.max_streak:
             return {"signal_ready": False, "side_ready": None, "reason": "ema_overextended"}
 
+        if self.entry_max_dist_ema_pct > 0:
+            if close > ema:
+                dist_pct = (close - ema) / max(ema, 1e-12) * 100.0
+                if dist_pct > self.entry_max_dist_ema_pct:
+                    return {"signal_ready": False, "side_ready": None, "reason": "ema_stretched"}
+            elif close < ema:
+                dist_pct = (ema - close) / max(ema, 1e-12) * 100.0
+                if dist_pct > self.entry_max_dist_ema_pct:
+                    return {"signal_ready": False, "side_ready": None, "reason": "ema_stretched"}
+
         long_setup = (
             close > ema
             and ae >= self.min_streak
             and ind.get("is_green")
-            and mom_long
+            and self._momentum_long_ok(ind)
         )
         short_setup = (
             close < ema
             and be >= self.min_streak
             and ind.get("is_red")
-            and mom_short
+            and self._momentum_short_ok(ind)
         )
 
         if long_setup:

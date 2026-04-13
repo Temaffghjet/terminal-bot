@@ -73,20 +73,29 @@ def calc_momentum(candles: list[dict[str, Any]], ema: list[float]) -> dict[str, 
         return {
             "momentum_long": False,
             "momentum_short": False,
+            "momentum_long_loose": False,
+            "momentum_short_loose": False,
             "distance_from_ema": 0.0,
             "distance_change": 0.0,
         }
     c1 = float(candles[-1]["close"])
     c2 = float(candles[-2]["close"])
+    o1 = float(candles[-1]["open"])
     e1 = float(ema[-1])
     e2 = float(ema[-2])
 
+    # strict: расстояние до EMA растёт — часто поздний вход в конце импульса
     momentum_long = (c1 > e1) and ((c1 - e1) > (c2 - e2)) and (c1 > c2)
     momentum_short = (c1 < e1) and ((e1 - c1) > (e2 - c2)) and (c1 < c2)
+    # loose: тренд + зелёная/красная свеча + движение в сторону сделки (раньше по времени)
+    momentum_long_loose = (c1 > e1) and (c1 > c2) and (c1 > o1)
+    momentum_short_loose = (c1 < e1) and (c1 < c2) and (c1 < o1)
 
     return {
         "momentum_long": momentum_long,
         "momentum_short": momentum_short,
+        "momentum_long_loose": momentum_long_loose,
+        "momentum_short_loose": momentum_short_loose,
         "distance_from_ema": abs(c1 - e1),
         "distance_change": (c1 - e1) - (c2 - e2),
     }
@@ -131,6 +140,7 @@ def get_indicators(candles: list[dict[str, Any]], entry_cfg: dict[str, Any]) -> 
     last = candles[-1]
     close = float(last["close"])
     open_ = float(last["open"])
+    prev_close = float(candles[-2]["close"]) if len(candles) >= 2 else close
     momentum = calc_momentum(candles, ema)
     rsi = calc_rsi(closes, period=rsi_period)
     body_pct = calc_candle_body_pct(last)
@@ -149,6 +159,8 @@ def get_indicators(candles: list[dict[str, Any]], entry_cfg: dict[str, Any]) -> 
         "quote_volume_usdt": close * vol_c,
         "rsi": rsi,
         "candle_body_pct": body_pct,
+        "prev_close": prev_close,
+        "distance_from_ema_pct": abs(close - float(ema[-1])) / max(float(ema[-1]), 1e-12) * 100.0,
     }
     result.update(momentum)
     return result

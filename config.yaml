@@ -44,7 +44,12 @@ ema_scalper:
     volume_lookback: 10
     volume_multiplier: 1.5
     min_candles_above_below: 3
-    max_candles_above_below: 8
+    # серия у EMA: не раньше min и не позже max (узкий коридор — меньше «догонов»)
+    max_candles_above_below: 5
+    # strict = импульс по расширению от EMA (часто поздно); loose = направление+свеча
+    momentum_mode: loose
+    # не входить, если цена дальше N%% от EMA на 5m (0 = выкл.)
+    entry_max_distance_from_ema_pct: 0.4
     min_candle_body_pct: 0.05
     no_trade_hours_utc: [2, 3, 4]
     min_volume_usdt: 500000
