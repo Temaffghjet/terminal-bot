@@ -17,7 +17,8 @@ pairs: []
 
 risk:
   max_position_usdt: 500
-  max_total_exposure: 2000
+  # Запас под несколько EMA-позиций (маржа × число слотов); при симуляции не критично
+  max_total_exposure: 500000
   max_daily_loss_pct: 3.0
   leverage: 5
   commission_pct: 0.1
@@ -38,6 +39,19 @@ ema_scalper:
       enabled: true
     - symbol: "BTC/USDC:USDC"
       enabled: true
+    - symbol: "SOL/USDC:USDC"
+      enabled: true
+    - symbol: "XRP/USDC:USDC"
+      enabled: true
+    - symbol: "FARTCOIN/USDC:USDC"
+      enabled: true
+    # HIP-3 (deployer xyz): нефть CL, золото/серебро — см. app.hyperliquid.xyz; unified CCXT:
+    - symbol: "XYZ-CL/USDC:USDC"
+      enabled: true
+    - symbol: "XYZ-GOLD/USDC:USDC"
+      enabled: true
+    - symbol: "XYZ-SILVER/USDC:USDC"
+      enabled: true
   timeframe: 5m
   entry:
     ema_period: 9
@@ -52,7 +66,8 @@ ema_scalper:
     entry_max_distance_from_ema_pct: 0.4
     min_candle_body_pct: 0.05
     no_trade_hours_utc: [2, 3, 4]
-    min_volume_usdt: 500000
+    # Ниже для альтов/коммодити; при «low_liquidity» отключите пару или поднимите порог
+    min_volume_usdt: 150000
     cooldown_candles: 4
     higher_tf: "15m"
     higher_tf_ema_period: 9
@@ -65,10 +80,13 @@ ema_scalper:
     max_hold_candles: 8
     ema_cross_exit: false
   risk:
-    balance_usdt: 50
-    position_size_pct: 25
-    max_open_positions: 2
-    leverage: 5
+    # Размер позиции: 50% баланса как маржа; плечо 10x на номинал (order_usdt = маржа × leverage)
+    use_exchange_balance: true
+    # Если API баланса недоступен — fallback; также опорная база для %% дневного стопа в RiskManager
+    balance_usdt: 1000
+    position_size_pct: 50
+    max_open_positions: 10
+    leverage: 10
     max_daily_loss_pct: 5.0
     use_limit_orders: true
   bot:

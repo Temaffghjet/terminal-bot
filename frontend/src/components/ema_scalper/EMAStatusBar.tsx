@@ -9,14 +9,53 @@ type IndRow = {
   reason?: string;
 };
 
-export default function EMAStatusBar({ indicators }: { indicators: Record<string, IndRow> }) {
-  const rows = Object.entries(indicators);
+function baseLabel(sym: string): string {
+  const base = sym.split("/")[0] ?? sym;
+  return base.replace(/^XYZ-/, "");
+}
+
+export default function EMAStatusBar({
+  indicators,
+  watchlist = [],
+}: {
+  indicators: Record<string, IndRow>;
+  /** Все пары из config; для отсутствующих в indicators — строка «прогрев» */
+  watchlist?: string[];
+}) {
+  const order =
+    watchlist.length > 0
+      ? watchlist
+      : Object.keys(indicators).sort();
+  const seen = new Set<string>();
+  const rows: { sym: string; ind?: IndRow }[] = [];
+  for (const sym of order) {
+    if (seen.has(sym)) continue;
+    seen.add(sym);
+    rows.push({ sym, ind: indicators[sym] });
+  }
+  for (const sym of Object.keys(indicators)) {
+    if (seen.has(sym)) continue;
+    seen.add(sym);
+    rows.push({ sym, ind: indicators[sym] });
+  }
   if (!rows.length) {
-    return <div className="text-gray-500 text-xs py-1">EMA: нет индикаторов (warmup)</div>;
+    return <div className="text-gray-500 text-xs py-1">EMA: нет пар в config</div>;
   }
   return (
     <div className="flex flex-col gap-1 text-xs">
-      {rows.map(([sym, ind]) => {
+      {rows.map(({ sym, ind }) => {
+        if (!ind) {
+          return (
+            <div
+              key={sym}
+              className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-gray-900 pb-1 font-mono text-gray-500"
+            >
+              <span className="text-amber-400/80">{baseLabel(sym)}</span>
+              <span className="text-gray-500">|</span>
+              <span>прогрев данных…</span>
+            </div>
+          );
+        }
         const ema = ind.ema_current ?? 0;
         const close = ind.close ?? 0;
         const up = close >= ema;
@@ -46,7 +85,7 @@ export default function EMAStatusBar({ indicators }: { indicators: Record<string
             key={sym}
             className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-gray-900 pb-1 font-mono"
           >
-            <span className="text-amber-400">{sym.split("/")[0]}</span>
+            <span className="text-amber-400">{baseLabel(sym)}</span>
             <span className="text-gray-500">|</span>
             <span>EMA ${ema.toFixed(2)}</span>
             <span className="text-gray-500">|</span>

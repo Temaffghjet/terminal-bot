@@ -636,6 +636,31 @@ def _quote_balance_from_ccxt(bal: dict) -> dict | None:
     return None
 
 
+def _ema_fallback_balance_usdt(es_risk: dict) -> float:
+    v = es_risk.get("balance_usdt")
+    if v is None:
+        return 50.0
+    return float(v)
+
+
+def effective_ema_deposit_usdt(exchange_usdt: dict | None, es_risk: dict) -> float:
+    """
+    Маржа (депозит) для расчёта notional: при use_exchange_balance — USDC/USDT с кошелька HL,
+    иначе balance_usdt из конфига (симуляция без привязки к фиксированной сумме в коде).
+    """
+    if not bool(es_risk.get("use_exchange_balance", False)):
+        return _ema_fallback_balance_usdt(es_risk)
+    ex_map = exchange_usdt or {}
+    u = ex_map.get("ema") or ex_map.get("main")
+    if u and isinstance(u, dict):
+        free = float(u.get("free") or 0)
+        total = float(u.get("total") or 0)
+        v = free if free > 0 else total * 0.99
+        if v > 0:
+            return v
+    return _ema_fallback_balance_usdt(es_risk)
+
+
 async def build_trading_capital_payload(rt: BotRuntime) -> dict:
     """Бюджеты из config + фактический USDT с биржи (кэш ~30 с)."""
     cfg = rt.config or {}
@@ -650,6 +675,7 @@ async def build_trading_capital_payload(rt: BotRuntime) -> dict:
             "stat_arb_max_leg_usdt": float(rk.get("max_position_usdt", 500)),
             "stat_arb_max_total_exposure_usdt": float(rk.get("max_total_exposure", 2000)),
             "breakout_balance_usdt": float((br_cfg.get("risk") or {}).get("balance_usdt", 1000)),
+            "ema_use_exchange_balance": bool(es_risk.get("use_exchange_balance", False)),
             "ema_balance_usdt": float(es_risk.get("balance_usdt", 50)),
             "ema_position_size_pct": float(es_risk.get("position_size_pct", 25)),
             "ema_leverage": int(es_risk.get("leverage", 5)),
@@ -661,6 +687,7 @@ async def build_trading_capital_payload(rt: BotRuntime) -> dict:
     if rt._bal_fetch_data is not None and now - rt._bal_fetch_ts < 30.0:
         out["exchange_usdt"] = dict(rt._bal_fetch_data.get("exchange_usdt", {}))
         out["exchange_errors"] = dict(rt._bal_fetch_data.get("exchange_errors", {}))
+        out["config"]["ema_balance_usdt"] = effective_ema_deposit_usdt(out["exchange_usdt"], es_risk)
         return out
 
     errors: dict[str, str] = {}
@@ -709,6 +736,7 @@ async def build_trading_capital_payload(rt: BotRuntime) -> dict:
         "exchange_usdt": out["exchange_usdt"],
         "exchange_errors": errors,
     }
+    out["config"]["ema_balance_usdt"] = effective_ema_deposit_usdt(out["exchange_usdt"], es_risk)
     return out
 
 
@@ -866,6 +894,10 @@ async def build_state_payload(rt: BotRuntime, metrics_by_pair: dict | None = Non
             "candle_history": dict(rt.ema_chart_history),
             "recent_trades": recent_ema_trades,
             "equity_history": ema_equity,
+            "enabled_symbols": [
+                p["symbol"] for p in (es_cfg_rt.get("pairs") or []) if p.get("enabled")
+            ],
+            "max_open_positions": int((es_cfg_rt.get("risk") or {}).get("max_open_positions", 2)),
         },
         "pnl": pnl,
         "trades_recent": dbmod.fetch_trades_last_n(rt.conn, 20) if rt.conn else [],
@@ -1216,7 +1248,6 @@ async def ema_scalper_bot_loop() -> None:
     ent_cfg = es.get("entry") or {}
     rk_es = es.get("risk") or {}
     dry_es = bool(es.get("dry_run", (cfg.get("bot") or {}).get("dry_run", True)))
-    dep = float(rk_es.get("balance_usdt", 50))
     lev = int(rk_es.get("leverage", 5))
     pos_pct = float(rk_es.get("position_size_pct", 25)) / 100.0
     ex_cfg = es.get("exit") or {}
@@ -1227,6 +1258,14 @@ async def ema_scalper_bot_loop() -> None:
     pairs = [p for p in es.get("pairs", []) if p.get("enabled")]
     while not RT._shutdown:
         try:
+            cap = await build_trading_capital_payload(RT)
+            ex_map = cap.get("exchange_usdt") or {}
+            dep = effective_ema_deposit_usdt(ex_map, rk_es)
+            if RT.risk:
+                ema_exp = sum(
+                    abs(float(getattr(p, "size_usdt", 0) or 0)) for p in RT.ema_positions.values()
+                )
+                RT.risk.set_open_notional(ema_exp)
             for pr in pairs:
                 if RT._shutdown:
                     break

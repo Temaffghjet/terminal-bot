@@ -19,6 +19,7 @@ export type TradingCapitalPayload = {
     /** доля депозита EMA на одну сделку, % */
     ema_position_size_pct?: number;
     ema_leverage?: number;
+    ema_use_exchange_balance?: boolean;
   };
   exchange_usdt: {
     main: ExchangeUsdtSlice;
@@ -28,11 +29,22 @@ export type TradingCapitalPayload = {
   exchange_errors?: Record<string, string>;
 };
 
+/** Слоты EMA: открыто / max одновременных позиций (из config бэкенда). */
+export type EmaSlotDisplay = {
+  label: string;
+  open: number;
+  max: number;
+};
+
 type Props = {
   botStatus: string;
   isConnected: boolean;
   openPairs: number;
   totalPairs: number;
+  /** Если задано — вместо «Open pairs» (stat-arb) показываем слоты EMA */
+  emaSlotDisplay?: EmaSlotDisplay | null;
+  /** Короткие имена базовых активов для подсказки в шапке */
+  emaWatchlistShort?: string[] | null;
   todayPnl: number;
   unrealized: number;
   winRate: number;
@@ -58,6 +70,8 @@ export default function ControlPanel({
   dryRun,
   testnet,
   tradingCapital,
+  emaSlotDisplay = null,
+  emaWatchlistShort = null,
   strategyMode = "pairs",
   onPause,
   onResume,
@@ -124,14 +138,45 @@ export default function ControlPanel({
               )}
               br ${tradingCapital.config.breakout_balance_usdt.toFixed(0)} · EMA $
               {tradingCapital.config.ema_balance_usdt.toFixed(0)}
+              {tradingCapital.config.ema_position_size_pct != null &&
+                tradingCapital.config.ema_leverage != null && (
+                  <span className="text-gray-500">
+                    {" "}
+                    ({tradingCapital.config.ema_position_size_pct.toFixed(0)}% маржи ·{" "}
+                    {tradingCapital.config.ema_leverage}x)
+                  </span>
+                )}
+              {tradingCapital.config.ema_use_exchange_balance ? (
+                <span className="text-gray-500"> · баланс с HL</span>
+              ) : null}
             </span>
           </span>
         )}
-        <span>
-          Open pairs:{" "}
-          <span className="text-white">
-            {openPairs}/{totalPairs}
+        {emaWatchlistShort != null && emaWatchlistShort.length > 0 ? (
+          <span
+            className="text-[10px] text-gray-500 max-w-[min(100vw,640px)] leading-snug"
+            title={emaWatchlistShort.join(", ")}
+          >
+            Пары EMA:{" "}
+            <span className="text-gray-300">{emaWatchlistShort.join(" · ")}</span>
           </span>
+        ) : null}
+        <span>
+          {emaSlotDisplay ? (
+            <>
+              {emaSlotDisplay.label}:{" "}
+              <span className="text-white">
+                {emaSlotDisplay.open}/{emaSlotDisplay.max}
+              </span>
+            </>
+          ) : (
+            <>
+              Open pairs:{" "}
+              <span className="text-white">
+                {openPairs}/{totalPairs}
+              </span>
+            </>
+          )}
         </span>
         <span>
           Today P&amp;L:{" "}

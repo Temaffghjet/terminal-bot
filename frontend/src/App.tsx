@@ -1,5 +1,5 @@
 import React, { useMemo } from "react";
-import ControlPanel, { type TradingCapitalPayload } from "./components/ControlPanel";
+import ControlPanel, { type EmaSlotDisplay, type TradingCapitalPayload } from "./components/ControlPanel";
 import PnLPanel from "./components/PnLPanel";
 import ActivePositionsTable from "./components/ActivePositionsTable";
 import RiskMonitor from "./components/RiskMonitor";
@@ -20,6 +20,11 @@ import { useWebSocket } from "./hooks/useWebSocket";
 
 const ENTRY_Z = 1.5;
 const STOP_Z = 3.0;
+
+function emaSymbolBaseShort(symbol: string): string {
+  const base = symbol.split("/")[0] ?? symbol;
+  return base.replace(/^XYZ-/, "");
+}
 
 export default function App() {
   const { state, isConnected, sendMessage } = useWebSocket();
@@ -54,6 +59,7 @@ export default function App() {
 
   const totalPairs = Object.keys(metrics).length || 1;
   const openPairs = positions.length;
+
   const todayPnl = Number(pnl.total_today ?? pnl.realized_today ?? 0);
   const unrealized = Number(pnl.unrealized ?? 0);
 
@@ -78,8 +84,28 @@ export default function App() {
         stats?: Record<string, unknown>;
         candle_history?: Record<string, { ts: number; close: number; ema: number }[]>;
         recent_trades?: Record<string, unknown>[];
+        /** Пары из config.yaml (enabled) */
+        enabled_symbols?: string[];
+        max_open_positions?: number;
       }
     | undefined;
+
+  const emaSlotDisplay: EmaSlotDisplay | null = useMemo(() => {
+    const syms = emaState?.enabled_symbols;
+    if (!syms?.length) return null;
+    const open = emaState?.positions?.length ?? 0;
+    const max = emaState?.max_open_positions ?? 2;
+    return { label: "EMA слоты", open, max };
+  }, [
+    emaState?.enabled_symbols,
+    emaState?.positions?.length,
+    emaState?.max_open_positions,
+  ]);
+
+  const emaWatchlistShort = useMemo(
+    () => (emaState?.enabled_symbols ?? []).map(emaSymbolBaseShort),
+    [emaState?.enabled_symbols],
+  );
 
   const breakoutOpenSyms = useMemo(() => {
     const s = new Set<string>();
@@ -100,12 +126,21 @@ export default function App() {
   }, [tradingCapital]);
 
   const emaChartSym = useMemo(() => {
+    const pos0 = emaState?.positions?.[0]?.symbol;
+    if (pos0) return pos0;
     const ch = emaState?.candle_history ?? {};
     const keys = Object.keys(ch);
     if (keys.length) return keys[0];
     const ind = emaState?.indicators ?? {};
-    return Object.keys(ind)[0] ?? "";
-  }, [emaState?.candle_history, emaState?.indicators]);
+    const ik = Object.keys(ind);
+    if (ik.length) return ik[0];
+    return (emaState?.enabled_symbols ?? [])[0] ?? "";
+  }, [
+    emaState?.candle_history,
+    emaState?.indicators,
+    emaState?.positions,
+    emaState?.enabled_symbols,
+  ]);
 
   const emaChartCandles = emaChartSym ? emaState?.candle_history?.[emaChartSym] ?? [] : [];
   const emaOpenPos = emaState?.positions?.[0];
@@ -145,6 +180,8 @@ export default function App() {
         isConnected={isConnected}
         openPairs={openPairs}
         totalPairs={totalPairs}
+        emaSlotDisplay={emaSlotDisplay}
+        emaWatchlistShort={emaWatchlistShort.length ? emaWatchlistShort : null}
         todayPnl={todayPnl}
         unrealized={unrealized}
         winRate={winRate}
@@ -215,11 +252,15 @@ export default function App() {
           <h2 className="text-emerald-500/90 text-xs uppercase tracking-wider">EMA Scalper (5m)</h2>
           {Object.keys(emaState?.indicators ?? {}).length === 0 &&
           !(emaState?.positions?.length ?? 0) &&
-          !(emaState?.recent_trades?.length ?? 0) ? (
+          !(emaState?.recent_trades?.length ?? 0) &&
+          !(emaState?.enabled_symbols?.length ?? 0) ? (
             <p className="text-gray-600 text-xs">EMA: прогрев данных или стратегия без активных пар</p>
           ) : (
             <>
-              <EMAStatusBar indicators={(emaState?.indicators ?? {}) as Record<string, Record<string, unknown>>} />
+              <EMAStatusBar
+                indicators={(emaState?.indicators ?? {}) as Record<string, Record<string, unknown>>}
+                watchlist={emaState?.enabled_symbols ?? []}
+              />
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
                 <EMAPositionCard positions={emaState?.positions ?? []} sendMessage={sendMessage} />
                 <div className="space-y-2">
