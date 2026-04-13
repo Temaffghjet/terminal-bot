@@ -44,6 +44,7 @@ ema_scalper:
     volume_lookback: 10
     volume_multiplier: 1.5
     min_candles_above_below: 3
+    max_candles_above_below: 8
     min_candle_body_pct: 0.05
     no_trade_hours_utc: [2, 3, 4]
     min_volume_usdt: 500000

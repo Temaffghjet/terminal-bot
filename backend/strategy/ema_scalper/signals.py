@@ -16,6 +16,7 @@ class EMAScalpSignalEngine:
         self.ema_period = int(ent.get("ema_period", 9))
         self.vol_mult = float(ent.get("volume_multiplier", 1.5))
         self.min_streak = int(ent.get("min_candles_above_below", 3))
+        self.max_streak = int(ent.get("max_candles_above_below", 8))
         self.no_trade_hours = list(ent.get("no_trade_hours_utc") or [])
         self.min_quote_vol = float(ent.get("min_volume_usdt", 0))
         self.cooldown_candles = int(ent.get("cooldown_candles", 4))
@@ -67,30 +68,42 @@ class EMAScalpSignalEngine:
 
         ema = float(ind["ema_current"])
         close = float(ind["close"])
+        ae = int(ind["above_ema_count"])
+        be = int(ind["below_ema_count"])
         mom_long = bool(ind.get("momentum_long"))
         mom_short = bool(ind.get("momentum_short"))
         rsi = float(ind.get("rsi", 50.0))
         body_pct = float(ind.get("candle_body_pct", 0.0))
         ht = ind.get("higher_tf_trend")
 
+        # Приоритет 1: старший ТФ (15m) — без данных не торгуем
+        if ht is None:
+            return {"action": "HOLD", "reason": "higher_tf_unavailable", "indicators": ind}
+        if close > ema and ht != "UP":
+            return {"action": "HOLD", "reason": "against_trend", "indicators": ind}
+        if close < ema and ht != "DOWN":
+            return {"action": "HOLD", "reason": "against_trend", "indicators": ind}
+
+        # Перегрев: слишком долго подряд у EMA — не догонять
+        if close > ema and ae > self.max_streak:
+            return {"action": "HOLD", "reason": "ema_overextended", "indicators": ind}
+        if close < ema and be > self.max_streak:
+            return {"action": "HOLD", "reason": "ema_overextended", "indicators": ind}
+
         long_setup = (
             close > ema
-            and int(ind["above_ema_count"]) >= self.min_streak
+            and ae >= self.min_streak
             and ind.get("is_green")
             and mom_long
         )
         short_setup = (
             close < ema
-            and int(ind["below_ema_count"]) >= self.min_streak
+            and be >= self.min_streak
             and ind.get("is_red")
             and mom_short
         )
 
         if long_setup:
-            if ht is None:
-                return {"action": "HOLD", "reason": "higher_tf_unavailable", "indicators": ind}
-            if ht != "UP":
-                return {"action": "HOLD", "reason": "against_higher_tf_trend", "indicators": ind}
             if rsi > self.rsi_long_max:
                 return {"action": "HOLD", "reason": "rsi_overbought", "indicators": ind}
             if body_pct < self.min_candle_body_pct:
@@ -98,10 +111,6 @@ class EMAScalpSignalEngine:
             return {"action": "OPEN_LONG", "reason": "ema_long", "indicators": ind}
 
         if short_setup:
-            if ht is None:
-                return {"action": "HOLD", "reason": "higher_tf_unavailable", "indicators": ind}
-            if ht != "DOWN":
-                return {"action": "HOLD", "reason": "against_higher_tf_trend", "indicators": ind}
             if rsi < self.rsi_short_min:
                 return {"action": "HOLD", "reason": "rsi_oversold", "indicators": ind}
             if body_pct < self.min_candle_body_pct:
@@ -147,30 +156,39 @@ class EMAScalpSignalEngine:
             return {"signal_ready": False, "side_ready": None, "reason": "volume_filter"}
         ema = float(ind["ema_current"])
         close = float(ind["close"])
+        ae = int(ind["above_ema_count"])
+        be = int(ind["below_ema_count"])
         rsi = float(ind.get("rsi", 50.0))
         body_pct = float(ind.get("candle_body_pct", 0.0))
         ht = ind.get("higher_tf_trend")
         mom_long = bool(ind.get("momentum_long"))
         mom_short = bool(ind.get("momentum_short"))
 
+        if ht is None:
+            return {"signal_ready": False, "side_ready": None, "reason": "higher_tf_unavailable"}
+        if close > ema and ht != "UP":
+            return {"signal_ready": False, "side_ready": None, "reason": "against_trend"}
+        if close < ema and ht != "DOWN":
+            return {"signal_ready": False, "side_ready": None, "reason": "against_trend"}
+        if close > ema and ae > self.max_streak:
+            return {"signal_ready": False, "side_ready": None, "reason": "ema_overextended"}
+        if close < ema and be > self.max_streak:
+            return {"signal_ready": False, "side_ready": None, "reason": "ema_overextended"}
+
         long_setup = (
             close > ema
-            and int(ind["above_ema_count"]) >= self.min_streak
+            and ae >= self.min_streak
             and ind.get("is_green")
             and mom_long
         )
         short_setup = (
             close < ema
-            and int(ind["below_ema_count"]) >= self.min_streak
+            and be >= self.min_streak
             and ind.get("is_red")
             and mom_short
         )
 
         if long_setup:
-            if ht is None:
-                return {"signal_ready": False, "side_ready": None, "reason": "higher_tf_unavailable"}
-            if ht != "UP":
-                return {"signal_ready": False, "side_ready": None, "reason": "against_higher_tf_trend"}
             if rsi > self.rsi_long_max:
                 return {"signal_ready": False, "side_ready": None, "reason": "rsi_overbought"}
             if body_pct < self.min_candle_body_pct:
@@ -178,10 +196,6 @@ class EMAScalpSignalEngine:
             return {"signal_ready": True, "side_ready": "LONG", "reason": "long_setup"}
 
         if short_setup:
-            if ht is None:
-                return {"signal_ready": False, "side_ready": None, "reason": "higher_tf_unavailable"}
-            if ht != "DOWN":
-                return {"signal_ready": False, "side_ready": None, "reason": "against_higher_tf_trend"}
             if rsi < self.rsi_short_min:
                 return {"signal_ready": False, "side_ready": None, "reason": "rsi_oversold"}
             if body_pct < self.min_candle_body_pct:
