@@ -41,54 +41,70 @@ ema_scalper:
       enabled: true
     - symbol: "SOL/USDC:USDC"
       enabled: true
-    - symbol: "XRP/USDC:USDC"
-      enabled: true
-    - symbol: "FARTCOIN/USDC:USDC"
-      enabled: true
-    # HIP-3 (deployer xyz): нефть CL, золото/серебро — см. app.hyperliquid.xyz; unified CCXT:
-    - symbol: "XYZ-CL/USDC:USDC"
-      enabled: true
-    - symbol: "XYZ-GOLD/USDC:USDC"
-      enabled: true
-    - symbol: "XYZ-SILVER/USDC:USDC"
-      enabled: true
   timeframe: 5m
   entry:
     ema_period: 9
     volume_lookback: 10
     volume_multiplier: 1.5
     min_candles_above_below: 3
-    # серия у EMA: не раньше min и не позже max (узкий коридор — меньше «догонов»)
-    max_candles_above_below: 5
+    max_candles_above_below: 8
     # strict = импульс по расширению от EMA (часто поздно); loose = направление+свеча
     momentum_mode: loose
     # не входить, если цена дальше N%% от EMA на 5m (0 = выкл.)
     entry_max_distance_from_ema_pct: 0.4
     min_candle_body_pct: 0.05
     no_trade_hours_utc: [2, 3, 4]
-    # Ниже для альтов/коммодити; при «low_liquidity» отключите пару или поднимите порог
-    min_volume_usdt: 150000
+    min_volume_usdt: 1000000
+    adx_filter_enabled: true
+    adx_period: 14
+    adx_threshold: 20
+    vwap_lookback: 20
+    vwap_max_distance_pct: 0.9
     cooldown_candles: 4
     higher_tf: "15m"
-    higher_tf_ema_period: 9
+    atr_period: 14
     rsi_period: 14
     rsi_long_max: 65
     rsi_short_min: 35
   exit:
-    take_profit_pct: 1.5
-    stop_loss_pct: 0.5
-    max_hold_candles: 8
+    take_profit_pct: 0.8
+    stop_loss_pct: 0.4
+    use_atr_targets: true
+    tp_atr_mult: 1.8
+    sl_atr_mult: 1.0
+    max_hold_candles: 6
     ema_cross_exit: false
   risk:
-    # Размер позиции: 50% баланса как маржа; плечо 10x на номинал (order_usdt = маржа × leverage)
     use_exchange_balance: true
-    # Если API баланса недоступен — fallback; также опорная база для %% дневного стопа в RiskManager
-    balance_usdt: 1000
-    position_size_pct: 50
-    max_open_positions: 10
-    leverage: 10
-    max_daily_loss_pct: 5.0
+    balance_usdt: 96
+    position_size_pct: 25
+    max_open_positions: 2
+    leverage: 5
+    max_daily_loss_pct: 3.0
     use_limit_orders: true
+  auto:
+    enabled: true
+    min_score_to_trade: 62
+    top_n_candidates: 2
+    min_budget_factor: 0.35
+    max_budget_factor: 1.0
+    min_position_pct: 12
+    max_position_pct: 35
+    min_leverage: 3
+    max_leverage: 5
+    # На real-трейде лучше держать false, пока не откалибруем модель
+    allow_live_dynamic_leverage: false
+    min_tp_pct: 0.5
+    max_tp_pct: 1.0
+    min_sl_pct: 0.25
+    max_sl_pct: 0.5
+    self_tune_enabled: true
+    self_tune_lookback_trades: 40
+    self_tune_min_samples: 12
+    self_tune_raise_step: 4
+    self_tune_lower_step: 2
+    self_tune_min_score_floor: 55
+    self_tune_min_score_ceil: 80
   bot:
     loop_interval_sec: 10
 

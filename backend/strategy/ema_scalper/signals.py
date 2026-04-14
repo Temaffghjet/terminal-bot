@@ -6,6 +6,12 @@ from typing import Any
 
 from backend.strategy.ema_scalper.position import EMAScalpPosition
 
+ALLOWED_SYMBOLS = {
+    "ETH/USDC:USDC",
+    "BTC/USDC:USDC",
+    "SOL/USDC:USDC",
+}
+
 
 class EMAScalpSignalEngine:
     def __init__(self, config: dict) -> None:
@@ -30,6 +36,9 @@ class EMAScalpSignalEngine:
         self.min_candle_body_pct = float(ent.get("min_candle_body_pct", 0.05))
         self.rsi_long_max = float(ent.get("rsi_long_max", 65))
         self.rsi_short_min = float(ent.get("rsi_short_min", 35))
+        self.adx_enabled = bool(ent.get("adx_filter_enabled", True))
+        self.adx_threshold = float(ent.get("adx_threshold", 20.0))
+        self.vwap_max_dist_pct = float(ent.get("vwap_max_distance_pct", 0.9))
         # strict = расширение дистанции до EMA (агрессивно, часто поздно); loose = тело+направление
         self.momentum_mode = str(ent.get("momentum_mode", "strict")).strip().lower()
         # 0 = выкл.; иначе не входить, если цена слишком далеко от EMA на 5m (% от цены)
@@ -67,6 +76,22 @@ class EMAScalpSignalEngine:
     ) -> dict[str, Any]:
         if ind.get("warming_up"):
             return {"action": "HOLD", "reason": "warmup", "indicators": ind}
+        if symbol not in ALLOWED_SYMBOLS:
+            return {"action": "HOLD", "reason": "symbol_not_whitelisted", "indicators": ind}
+        qv = float(ind.get("quote_volume_usdt", 0))
+        if self.min_quote_vol > 0 and qv < self.min_quote_vol:
+            return {"action": "HOLD", "reason": "low_liquidity", "indicators": ind}
+        adx = float(ind.get("adx", 0.0))
+        if self.adx_enabled and adx < self.adx_threshold:
+            return {"action": "HOLD", "reason": "adx_chop", "indicators": ind}
+        dvwap = float(ind.get("distance_from_vwap_pct", 0.0))
+        if self.vwap_max_dist_pct > 0 and dvwap > self.vwap_max_dist_pct:
+            return {"action": "HOLD", "reason": "vwap_stretched", "indicators": ind}
+        ht = ind.get("higher_tf_trend")
+        if ht is None:
+            return {"action": "HOLD", "reason": "higher_tf_unavailable", "indicators": ind}
+        if ht == "FLAT":
+            return {"action": "HOLD", "reason": "higher_tf_flat", "indicators": ind}
         if open_count >= self.max_open:
             return {"action": "HOLD", "reason": "max_positions", "indicators": ind}
         if not risk_ok:
@@ -74,9 +99,6 @@ class EMAScalpSignalEngine:
         h = datetime.now(timezone.utc).hour
         if h in self.no_trade_hours:
             return {"action": "HOLD", "reason": "no_trade_hour", "indicators": ind}
-        qv = float(ind.get("quote_volume_usdt", 0))
-        if self.min_quote_vol > 0 and qv < self.min_quote_vol:
-            return {"action": "HOLD", "reason": "low_liquidity", "indicators": ind}
         vr = float(ind.get("volume_ratio", 0))
         if vr < self.vol_mult:
             return {"action": "HOLD", "reason": "volume_filter", "indicators": ind}
@@ -90,15 +112,6 @@ class EMAScalpSignalEngine:
         be = int(ind["below_ema_count"])
         rsi = float(ind.get("rsi", 50.0))
         body_pct = float(ind.get("candle_body_pct", 0.0))
-        ht = ind.get("higher_tf_trend")
-
-        # Приоритет 1: старший ТФ (15m) — без данных не торгуем
-        if ht is None:
-            return {"action": "HOLD", "reason": "higher_tf_unavailable", "indicators": ind}
-        if close > ema and ht != "UP":
-            return {"action": "HOLD", "reason": "against_trend", "indicators": ind}
-        if close < ema and ht != "DOWN":
-            return {"action": "HOLD", "reason": "against_trend", "indicators": ind}
 
         # Перегрев: слишком долго подряд у EMA — не догонять
         if close > ema and ae > self.max_streak:
@@ -130,6 +143,8 @@ class EMAScalpSignalEngine:
         )
 
         if long_setup:
+            if ht != "UP":
+                return {"action": "HOLD", "reason": "against_higher_tf", "indicators": ind}
             if rsi > self.rsi_long_max:
                 return {"action": "HOLD", "reason": "rsi_overbought", "indicators": ind}
             if body_pct < self.min_candle_body_pct:
@@ -137,6 +152,8 @@ class EMAScalpSignalEngine:
             return {"action": "OPEN_LONG", "reason": "ema_long", "indicators": ind}
 
         if short_setup:
+            if ht != "DOWN":
+                return {"action": "HOLD", "reason": "against_higher_tf", "indicators": ind}
             if rsi < self.rsi_short_min:
                 return {"action": "HOLD", "reason": "rsi_oversold", "indicators": ind}
             if body_pct < self.min_candle_body_pct:
@@ -150,6 +167,17 @@ class EMAScalpSignalEngine:
     ) -> dict[str, Any]:
         if ind.get("warming_up"):
             return {"should_exit": False, "reason": None, "pnl_pct": 0.0}
+        px = float(pos.current_price)
+        if pos.side == "LONG":
+            if px >= float(pos.tp_price):
+                return {"should_exit": True, "reason": "TP", "pnl_pct": pos.pnl_pct()}
+            if px <= float(pos.sl_price):
+                return {"should_exit": True, "reason": "SL", "pnl_pct": pos.pnl_pct()}
+        else:
+            if px <= float(pos.tp_price):
+                return {"should_exit": True, "reason": "TP", "pnl_pct": pos.pnl_pct()}
+            if px >= float(pos.sl_price):
+                return {"should_exit": True, "reason": "SL", "pnl_pct": pos.pnl_pct()}
         pnl = pos.pnl_pct()
         if pnl >= self.tp_pct:
             return {"should_exit": True, "reason": "TP", "pnl_pct": pnl}
@@ -171,12 +199,23 @@ class EMAScalpSignalEngine:
         """Для UI: готовность к входу без проверки позиции/риска/кулдауна."""
         if ind.get("warming_up"):
             return {"signal_ready": False, "side_ready": None, "reason": "warmup"}
-        h = datetime.now(timezone.utc).hour
-        if h in self.no_trade_hours:
-            return {"signal_ready": False, "side_ready": None, "reason": "no_trade_hour"}
+        ht = ind.get("higher_tf_trend")
+        if ht is None:
+            return {"signal_ready": False, "side_ready": None, "reason": "higher_tf_unavailable"}
+        if ht == "FLAT":
+            return {"signal_ready": False, "side_ready": None, "reason": "higher_tf_flat"}
         qv = float(ind.get("quote_volume_usdt", 0))
         if self.min_quote_vol > 0 and qv < self.min_quote_vol:
             return {"signal_ready": False, "side_ready": None, "reason": "low_liquidity"}
+        adx = float(ind.get("adx", 0.0))
+        if self.adx_enabled and adx < self.adx_threshold:
+            return {"signal_ready": False, "side_ready": None, "reason": "adx_chop"}
+        dvwap = float(ind.get("distance_from_vwap_pct", 0.0))
+        if self.vwap_max_dist_pct > 0 and dvwap > self.vwap_max_dist_pct:
+            return {"signal_ready": False, "side_ready": None, "reason": "vwap_stretched"}
+        h = datetime.now(timezone.utc).hour
+        if h in self.no_trade_hours:
+            return {"signal_ready": False, "side_ready": None, "reason": "no_trade_hour"}
         vr = float(ind.get("volume_ratio", 0))
         if vr < self.vol_mult:
             return {"signal_ready": False, "side_ready": None, "reason": "volume_filter"}
@@ -186,13 +225,6 @@ class EMAScalpSignalEngine:
         be = int(ind["below_ema_count"])
         rsi = float(ind.get("rsi", 50.0))
         body_pct = float(ind.get("candle_body_pct", 0.0))
-        ht = ind.get("higher_tf_trend")
-        if ht is None:
-            return {"signal_ready": False, "side_ready": None, "reason": "higher_tf_unavailable"}
-        if close > ema and ht != "UP":
-            return {"signal_ready": False, "side_ready": None, "reason": "against_trend"}
-        if close < ema and ht != "DOWN":
-            return {"signal_ready": False, "side_ready": None, "reason": "against_trend"}
         if close > ema and ae > self.max_streak:
             return {"signal_ready": False, "side_ready": None, "reason": "ema_overextended"}
         if close < ema and be > self.max_streak:
@@ -222,6 +254,8 @@ class EMAScalpSignalEngine:
         )
 
         if long_setup:
+            if ht != "UP":
+                return {"signal_ready": False, "side_ready": None, "reason": "against_higher_tf"}
             if rsi > self.rsi_long_max:
                 return {"signal_ready": False, "side_ready": None, "reason": "rsi_overbought"}
             if body_pct < self.min_candle_body_pct:
@@ -229,6 +263,8 @@ class EMAScalpSignalEngine:
             return {"signal_ready": True, "side_ready": "LONG", "reason": "long_setup"}
 
         if short_setup:
+            if ht != "DOWN":
+                return {"signal_ready": False, "side_ready": None, "reason": "against_higher_tf"}
             if rsi < self.rsi_short_min:
                 return {"signal_ready": False, "side_ready": None, "reason": "rsi_oversold"}
             if body_pct < self.min_candle_body_pct:

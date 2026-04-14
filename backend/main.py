@@ -33,7 +33,7 @@ from backend.strategy.breakout import (
     BreakoutSignalEngine,
 )
 from backend.strategy.ema_scalper import EMAScalpPosition, EMAScalpSignalEngine, get_indicators
-from backend.strategy.ema_scalper.indicators import calc_ema, higher_tf_trend_from_closes
+from backend.strategy.ema_scalper.indicators import calc_ema, compute_higher_tf_trend_from_ohlcv
 from backend.strategy.micro_signals import MicroSignalEngine
 from backend.strategy.position_manager import LegState, PairPosition, PositionManager, ScalpPosition
 from backend.strategy.risk import RiskManager
@@ -100,6 +100,8 @@ class BotRuntime:
         self.ema_current_bar_ts: dict[str, int] = {}
         self.ema_indicators: dict[str, dict] = {}
         self.ema_chart_history: dict[str, list[dict]] = {}
+        self.ema_auto_tuner_history: deque[dict] = deque(maxlen=20)
+        self.ema_auto_tuner_last_dyn_score: float | None = None
         self._shutdown = False
         self._shutdown_event: asyncio.Event | None = None
         self.ws_task: asyncio.Task | None = None
@@ -434,6 +436,35 @@ class BotRuntime:
 
 RT = BotRuntime()
 
+# Кэш тренда старшего ТФ (15m): symbol|tf → (ts, данные), TTL 60 с — не дёргать биржу каждые 10 с
+_ema_higher_tf_cache: dict[str, tuple[float, dict | None]] = {}
+
+
+async def _ema_higher_tf_trend_cached(
+    ex: object,
+    symbol: str,
+    tf: str,
+    ttl_sec: float = 60.0,
+) -> dict | None:
+    """Один fetch на (symbol, tf) не чаще чем раз в ttl_sec; расчёт EMA9/EMA21 по закрытым свечам."""
+    now = time.time()
+    key = f"{symbol}|{tf}"
+    if key in _ema_higher_tf_cache:
+        ts, data = _ema_higher_tf_cache[key]
+        if now - ts < ttl_sec:
+            return data
+    try:
+        raw = await asyncio.wait_for(
+            asyncio.to_thread(ex.fetch_ohlcv, symbol, tf, None, 25),  # type: ignore[attr-defined]
+            timeout=75.0,
+        )
+    except (asyncio.TimeoutError, Exception) as e:
+        logger.warning("EMA %s: higher_tf fetch %s: %s", symbol, tf, e)
+        return None
+    data = compute_higher_tf_trend_from_ohlcv(raw) if raw else None
+    _ema_higher_tf_cache[key] = (now, data)
+    return data
+
 
 async def scalping_bot_loop() -> None:
     """Micro scalping: EMA + объём, TP/SL/время/EMA-cross, лимит позиций."""
@@ -661,6 +692,178 @@ def effective_ema_deposit_usdt(exchange_usdt: dict | None, es_risk: dict) -> flo
     return _ema_fallback_balance_usdt(es_risk)
 
 
+def _ema_auto_trade_profile(
+    ind: dict,
+    dep_usdt: float,
+    rk_es: dict,
+    ex_cfg: dict,
+    auto_cfg: dict,
+    base_lev: int,
+    base_pos_pct: float,
+    dry_run: bool,
+) -> dict:
+    """
+    Автопилот EMA: скоринг качества входа + динамические риск-параметры.
+    Возвращает профиль сделки для текущего символа/бара.
+    """
+    trend = str(ind.get("higher_tf_trend") or "")
+    adx = float(ind.get("adx") or 0.0)
+    vol = float(ind.get("volume_ratio") or 0.0)
+    dvwap = float(ind.get("distance_from_vwap_pct") or 0.0)
+    rsi = float(ind.get("rsi") or 50.0)
+    atr_pct = float(ind.get("atr_pct") or 0.0)
+
+    score = 0.0
+    if trend in ("UP", "DOWN"):
+        score += 25.0
+    score += min(max(adx, 0.0), 35.0) / 35.0 * 20.0
+    score += min(max(vol, 0.0), 2.5) / 2.5 * 20.0
+    score += 15.0 if 35.0 <= rsi <= 65.0 else (8.0 if 30.0 <= rsi <= 70.0 else 2.0)
+    score += 12.0 if dvwap <= 0.8 else (7.0 if dvwap <= 1.1 else 2.0)
+    score += 8.0 if atr_pct <= 0.9 else (5.0 if atr_pct <= 1.4 else 2.0)
+    score = max(0.0, min(100.0, score))
+
+    min_score = float(auto_cfg.get("min_score_to_trade", 62.0))
+    allow_trade = score >= min_score
+
+    # Динамический бюджет: в хорошем рынке больше, в слабом — меньше
+    min_budget_factor = float(auto_cfg.get("min_budget_factor", 0.35))
+    max_budget_factor = float(auto_cfg.get("max_budget_factor", 1.0))
+    q = max(0.0, min(1.0, (score - min_score) / max(100.0 - min_score, 1e-9)))
+    budget_factor = min_budget_factor + (max_budget_factor - min_budget_factor) * q
+    budget_usdt = dep_usdt * budget_factor
+
+    # Динамический % маржи от бюджета и плечо
+    min_pos_pct = float(auto_cfg.get("min_position_pct", max(5.0, base_pos_pct * 100 * 0.6)))
+    max_pos_pct = float(auto_cfg.get("max_position_pct", min(60.0, base_pos_pct * 100 * 1.4)))
+    pos_pct = min_pos_pct + (max_pos_pct - min_pos_pct) * q
+
+    min_lev = int(auto_cfg.get("min_leverage", max(1, base_lev - 2)))
+    max_lev = int(auto_cfg.get("max_leverage", base_lev))
+    live_dyn_lev = bool(auto_cfg.get("allow_live_dynamic_leverage", False))
+    if dry_run or live_dyn_lev:
+        lev = int(round(min_lev + (max_lev - min_lev) * q))
+    else:
+        lev = base_lev
+
+    # Динамические fallback TP/SL (если ATR-режим вдруг выключен)
+    min_tp = float(auto_cfg.get("min_tp_pct", 0.5))
+    max_tp = float(auto_cfg.get("max_tp_pct", float(ex_cfg.get("take_profit_pct", 1.0))))
+    min_sl = float(auto_cfg.get("min_sl_pct", 0.25))
+    max_sl = float(auto_cfg.get("max_sl_pct", float(ex_cfg.get("stop_loss_pct", 0.6))))
+    tp_pct = min_tp + (max_tp - min_tp) * q
+    sl_pct = min_sl + (max_sl - min_sl) * q
+
+    # ATR-мультипликаторы тоже слегка адаптивные
+    use_atr_targets = bool(ex_cfg.get("use_atr_targets", True))
+    base_tp_atr = float(ex_cfg.get("tp_atr_mult", 1.8))
+    base_sl_atr = float(ex_cfg.get("sl_atr_mult", 1.0))
+    tp_atr_mult = max(1.1, base_tp_atr * (0.9 + 0.25 * q))
+    sl_atr_mult = max(0.7, base_sl_atr * (1.05 - 0.25 * q))
+
+    margin_usdt = budget_usdt * (pos_pct / 100.0)
+    return {
+        "auto_enabled": True,
+        "score": round(score, 2),
+        "allow_trade": allow_trade,
+        "budget_factor": round(budget_factor, 4),
+        "budget_usdt": round(budget_usdt, 4),
+        "position_pct": round(pos_pct, 3),
+        "margin_usdt": round(margin_usdt, 6),
+        "leverage": int(max(1, lev)),
+        "tp_pct": round(tp_pct, 4),
+        "sl_pct": round(sl_pct, 4),
+        "use_atr_targets": use_atr_targets,
+        "tp_atr_mult": round(tp_atr_mult, 4),
+        "sl_atr_mult": round(sl_atr_mult, 4),
+    }
+
+
+def _ema_auto_dynamic_min_score(
+    conn: object | None,
+    auto_cfg: dict,
+    base_min_score: float,
+) -> float:
+    """
+    Self-tuning порога входа: подстройка min_score по последним закрытым EMA сделкам.
+    - winrate/PF слабые -> порог выше (жёстче)
+    - winrate/PF хорошие -> порог ниже (больше сигналов)
+    """
+    if not bool(auto_cfg.get("self_tune_enabled", True)):
+        return base_min_score
+    if conn is None:
+        return base_min_score
+    lookback = int(auto_cfg.get("self_tune_lookback_trades", 40))
+    min_samples = int(auto_cfg.get("self_tune_min_samples", 12))
+    try:
+        recent = dbmod.get_recent_scalp_trades(conn, lookback, strategy="ema_scalper")
+    except Exception:
+        return base_min_score
+    closed = [r for r in recent if (r.get("pnl_usdt") is not None)]
+    if len(closed) < min_samples:
+        return base_min_score
+    pnls = [float(r.get("pnl_usdt") or 0.0) for r in closed]
+    wins = [p for p in pnls if p > 0]
+    losses_abs = [abs(p) for p in pnls if p < 0]
+    winrate = len(wins) / max(len(pnls), 1)
+    gross_win = sum(wins)
+    gross_loss = sum(losses_abs)
+    pf = (gross_win / gross_loss) if gross_loss > 1e-12 else 2.0
+    delta = 0.0
+    if winrate < 0.48 or pf < 1.15:
+        delta += float(auto_cfg.get("self_tune_raise_step", 4.0))
+    elif winrate > 0.56 and pf > 1.35:
+        delta -= float(auto_cfg.get("self_tune_lower_step", 2.0))
+    lo = float(auto_cfg.get("self_tune_min_score_floor", 55.0))
+    hi = float(auto_cfg.get("self_tune_min_score_ceil", 80.0))
+    return max(lo, min(hi, base_min_score + delta))
+
+
+def _ema_auto_tuner_state(conn: object | None, auto_cfg: dict, base_min_score: float) -> dict:
+    lookback = int(auto_cfg.get("self_tune_lookback_trades", 40))
+    min_samples = int(auto_cfg.get("self_tune_min_samples", 12))
+    out = {
+        "enabled": bool(auto_cfg.get("enabled", False)),
+        "self_tune_enabled": bool(auto_cfg.get("self_tune_enabled", True)),
+        "lookback": lookback,
+        "min_samples": min_samples,
+        "samples": 0,
+        "winrate": 0.0,
+        "profit_factor": 0.0,
+        "base_min_score": float(base_min_score),
+        "dynamic_min_score": float(base_min_score),
+        "decision": "insufficient_data",
+    }
+    if conn is None:
+        return out
+    try:
+        recent = dbmod.get_recent_scalp_trades(conn, lookback, strategy="ema_scalper")
+    except Exception:
+        return out
+    closed = [r for r in recent if (r.get("pnl_usdt") is not None)]
+    out["samples"] = len(closed)
+    if len(closed) < min_samples:
+        return out
+    pnls = [float(r.get("pnl_usdt") or 0.0) for r in closed]
+    wins = [p for p in pnls if p > 0]
+    losses_abs = [abs(p) for p in pnls if p < 0]
+    winrate = len(wins) / max(len(pnls), 1)
+    gross_win = sum(wins)
+    gross_loss = sum(losses_abs)
+    pf = (gross_win / gross_loss) if gross_loss > 1e-12 else 2.0
+    out["winrate"] = round(winrate * 100.0, 2)
+    out["profit_factor"] = round(pf, 4)
+    dyn = _ema_auto_dynamic_min_score(conn, auto_cfg, base_min_score)
+    out["dynamic_min_score"] = float(dyn)
+    if dyn > base_min_score:
+        out["decision"] = "raise_threshold"
+    elif dyn < base_min_score:
+        out["decision"] = "lower_threshold"
+    else:
+        out["decision"] = "keep_threshold"
+    return out
+
+
 async def build_trading_capital_payload(rt: BotRuntime) -> dict:
     """Бюджеты из config + фактический USDT с биржи (кэш ~30 с)."""
     cfg = rt.config or {}
@@ -821,6 +1024,9 @@ async def build_state_payload(rt: BotRuntime, metrics_by_pair: dict | None = Non
     br_dep = float((br_cfg.get("risk") or {}).get("balance_usdt", 1000))
     es_cfg_rt = (rt.config.get("ema_scalper") or {}) if rt.config else {}
     es_dep = float((es_cfg_rt.get("risk") or {}).get("balance_usdt", 50))
+    es_auto = (es_cfg_rt.get("auto") or {}) if es_cfg_rt else {}
+    base_min_score = float(es_auto.get("min_score_to_trade", 62.0))
+    auto_tuner = _ema_auto_tuner_state(rt.conn, es_auto, base_min_score)
     breakout_equity: list[float] = []
     ema_equity: list[float] = []
     br_st: dict = {}
@@ -898,6 +1104,8 @@ async def build_state_payload(rt: BotRuntime, metrics_by_pair: dict | None = Non
                 p["symbol"] for p in (es_cfg_rt.get("pairs") or []) if p.get("enabled")
             ],
             "max_open_positions": int((es_cfg_rt.get("risk") or {}).get("max_open_positions", 2)),
+            "auto_tuner": auto_tuner,
+            "auto_tuner_history": list(rt.ema_auto_tuner_history),
         },
         "pnl": pnl,
         "trades_recent": dbmod.fetch_trades_last_n(rt.conn, 20) if rt.conn else [],
@@ -1247,12 +1455,17 @@ async def ema_scalper_bot_loop() -> None:
     loop_sec = float((es.get("bot") or {}).get("loop_interval_sec", 10))
     ent_cfg = es.get("entry") or {}
     rk_es = es.get("risk") or {}
+    auto_cfg = es.get("auto") or {}
+    auto_enabled = bool(auto_cfg.get("enabled", False))
     dry_es = bool(es.get("dry_run", (cfg.get("bot") or {}).get("dry_run", True)))
     lev = int(rk_es.get("leverage", 5))
     pos_pct = float(rk_es.get("position_size_pct", 25)) / 100.0
     ex_cfg = es.get("exit") or {}
     tp_pct = float(ex_cfg.get("take_profit_pct", 1.5))
     sl_pct = float(ex_cfg.get("stop_loss_pct", 0.5))
+    use_atr_targets = bool(ex_cfg.get("use_atr_targets", True))
+    tp_atr_mult = float(ex_cfg.get("tp_atr_mult", 1.8))
+    sl_atr_mult = float(ex_cfg.get("sl_atr_mult", 1.0))
     max_hold = int(ex_cfg.get("max_hold_candles", 12))
     tf_ms = int(float(ex.parse_timeframe(tf)) * 1000)
     pairs = [p for p in es.get("pairs", []) if p.get("enabled")]
@@ -1261,6 +1474,29 @@ async def ema_scalper_bot_loop() -> None:
             cap = await build_trading_capital_payload(RT)
             ex_map = cap.get("exchange_usdt") or {}
             dep = effective_ema_deposit_usdt(ex_map, rk_es)
+            base_min_score = float(auto_cfg.get("min_score_to_trade", 62.0))
+            dyn_min_score = (
+                _ema_auto_dynamic_min_score(RT.conn, auto_cfg, base_min_score)
+                if auto_enabled
+                else base_min_score
+            )
+            if auto_enabled:
+                state_now = _ema_auto_tuner_state(RT.conn, auto_cfg, base_min_score)
+                dyn_now = float(state_now.get("dynamic_min_score") or dyn_min_score)
+                if RT.ema_auto_tuner_last_dyn_score is None or abs(dyn_now - RT.ema_auto_tuner_last_dyn_score) > 1e-9:
+                    RT.ema_auto_tuner_history.append(
+                        {
+                            "ts": datetime.now(timezone.utc).isoformat(),
+                            "base_min_score": float(state_now.get("base_min_score") or base_min_score),
+                            "dynamic_min_score": dyn_now,
+                            "winrate": float(state_now.get("winrate") or 0.0),
+                            "profit_factor": float(state_now.get("profit_factor") or 0.0),
+                            "samples": int(state_now.get("samples") or 0),
+                            "decision": str(state_now.get("decision") or "keep_threshold"),
+                        }
+                    )
+                    RT.ema_auto_tuner_last_dyn_score = dyn_now
+            top_n = int(auto_cfg.get("top_n_candidates", 0)) if auto_enabled else 0
             if RT.risk:
                 ema_exp = sum(
                     abs(float(getattr(p, "size_usdt", 0) or 0)) for p in RT.ema_positions.values()
@@ -1307,24 +1543,34 @@ async def ema_scalper_bot_loop() -> None:
                     )
                     if not ind.get("warming_up"):
                         higher_tf = str(ent_cfg.get("higher_tf", "15m"))
-                        ht_ema_pd = int(ent_cfg.get("higher_tf_ema_period", ema_period))
-                        try:
-                            raw_htf = await asyncio.wait_for(
-                                asyncio.to_thread(ex.fetch_ohlcv, sym, higher_tf, None, 25),
-                                timeout=75.0,
-                            )
-                        except (asyncio.TimeoutError, Exception) as e:
-                            logger.warning(
-                                "EMA %s: fetch_ohlcv higher_tf %s: %s", sym, higher_tf, e
-                            )
-                            raw_htf = None
-                        if raw_htf and len(raw_htf) >= 2:
-                            closes_htf = [float(x[4]) for x in raw_htf[:-1]]
-                            ind["higher_tf_trend"] = higher_tf_trend_from_closes(
-                                closes_htf, ht_ema_pd
-                            )
+                        ht_detail = await _ema_higher_tf_trend_cached(ex, sym, higher_tf, ttl_sec=60.0)
+                        if ht_detail:
+                            ind["higher_tf_trend"] = ht_detail["trend"]
+                            ind["higher_tf_trend_detail"] = ht_detail
                         else:
                             ind["higher_tf_trend"] = None
+                            ind["higher_tf_trend_detail"] = None
+                    auto_profile = (
+                        _ema_auto_trade_profile(
+                            ind,
+                            dep,
+                            rk_es,
+                            ex_cfg,
+                            {**auto_cfg, "min_score_to_trade": dyn_min_score},
+                            lev,
+                            pos_pct,
+                            dry_es,
+                        )
+                        if (auto_enabled and not ind.get("warming_up"))
+                        else None
+                    )
+                    if auto_profile:
+                        ind["auto_trade_score"] = auto_profile["score"]
+                        ind["auto_budget_factor"] = auto_profile["budget_factor"]
+                        ind["auto_position_pct"] = auto_profile["position_pct"]
+                        ind["auto_leverage"] = auto_profile["leverage"]
+                        ind["auto_allow_trade"] = auto_profile["allow_trade"]
+                        ind["auto_min_score_dynamic"] = dyn_min_score
                     closes_all = [c["close"] for c in candles]
                     ema_series = calc_ema(closes_all, ema_period) if len(closes_all) >= ema_period else []
                     slice_c = candles[-50:] if len(candles) > 50 else candles
@@ -1382,7 +1628,50 @@ async def ema_scalper_bot_loop() -> None:
                     RT.ema_last_bar_ts[sym] = bar_ts
                     if ind.get("warming_up"):
                         continue
-                    notional = dep * pos_pct
+                    if auto_profile and not auto_profile.get("allow_trade", False):
+                        continue
+                    if auto_profile and top_n > 0:
+                        score_map: list[float] = []
+                        for pp in pairs:
+                            ss = str(pp.get("symbol") or "")
+                            if not ss:
+                                continue
+                            if ss == sym:
+                                score_map.append(float(auto_profile.get("score") or 0.0))
+                                continue
+                            ind_prev = RT.ema_indicators.get(ss) or {}
+                            v = ind_prev.get("auto_trade_score")
+                            if v is None:
+                                continue
+                            score_map.append(float(v))
+                        if len(score_map) >= top_n:
+                            score_map.sort(reverse=True)
+                            cutoff = score_map[top_n - 1]
+                            if float(auto_profile.get("score") or 0.0) < cutoff:
+                                continue
+                    notional = (
+                        float(auto_profile["margin_usdt"])
+                        if auto_profile
+                        else dep * pos_pct
+                    )
+                    trade_lev = int(auto_profile["leverage"]) if auto_profile else lev
+                    trade_tp_pct = float(auto_profile["tp_pct"]) if auto_profile else tp_pct
+                    trade_sl_pct = float(auto_profile["sl_pct"]) if auto_profile else sl_pct
+                    trade_use_atr_targets = (
+                        bool(auto_profile.get("use_atr_targets", use_atr_targets))
+                        if auto_profile
+                        else use_atr_targets
+                    )
+                    trade_tp_atr_mult = (
+                        float(auto_profile.get("tp_atr_mult", tp_atr_mult))
+                        if auto_profile
+                        else tp_atr_mult
+                    )
+                    trade_sl_atr_mult = (
+                        float(auto_profile.get("sl_atr_mult", sl_atr_mult))
+                        if auto_profile
+                        else sl_atr_mult
+                    )
                     ok, _ = RT.risk.check_can_open(f"ema:{sym}", notional, legs=1) if RT.risk else (True, "")
                     logger.debug(
                         "[EMA DEBUG] %s | close=%.2f ema=%.2f | above=%s below=%s | "
@@ -1407,21 +1696,32 @@ async def ema_scalper_bot_loop() -> None:
                     if entry_sig["action"] not in ("OPEN_LONG", "OPEN_SHORT"):
                         continue
                     side_buy = entry_sig["action"] == "OPEN_LONG"
-                    order_usdt = notional * lev
+                    order_usdt = notional * trade_lev
                     res = await om.open_scalp_market(
                         sym, "buy" if side_buy else "sell", order_usdt, dry_run_override=dry_es
                     )
                     if res.get("error"):
                         continue
                     entry = float(res.get("price") or last)
-                    qty = float(res.get("amount") or (notional * lev / max(entry, 1e-12)))
+                    qty = float(res.get("amount") or (notional * trade_lev / max(entry, 1e-12)))
                     side = "LONG" if side_buy else "SHORT"
-                    if side == "LONG":
-                        tp_p = entry * (1.0 + tp_pct / 100.0)
-                        sl_p = entry * (1.0 - sl_pct / 100.0)
+                    atr = float(ind.get("atr") or 0.0)
+                    if trade_use_atr_targets and atr > 0:
+                        tp_abs = atr * trade_tp_atr_mult
+                        sl_abs = atr * trade_sl_atr_mult
+                        if side == "LONG":
+                            tp_p = entry + tp_abs
+                            sl_p = entry - sl_abs
+                        else:
+                            tp_p = entry - tp_abs
+                            sl_p = entry + sl_abs
                     else:
-                        tp_p = entry * (1.0 - tp_pct / 100.0)
-                        sl_p = entry * (1.0 + sl_pct / 100.0)
+                        if side == "LONG":
+                            tp_p = entry * (1.0 + trade_tp_pct / 100.0)
+                            sl_p = entry * (1.0 - trade_sl_pct / 100.0)
+                        else:
+                            tp_p = entry * (1.0 - trade_tp_pct / 100.0)
+                            sl_p = entry * (1.0 + trade_sl_pct / 100.0)
                     ts_open_iso = datetime.fromtimestamp(bar_ts / 1000.0, tz=timezone.utc).isoformat()
                     entry_reason = str(entry_sig.get("reason") or "")
                     RT.ema_positions[sym] = EMAScalpPosition(
@@ -1430,7 +1730,7 @@ async def ema_scalper_bot_loop() -> None:
                         entry_price=entry,
                         size_usdt=notional,
                         qty=qty,
-                        leverage=lev,
+                        leverage=trade_lev,
                         tp_price=tp_p,
                         sl_price=sl_p,
                         max_hold_candles=max_hold,
@@ -1448,20 +1748,34 @@ async def ema_scalper_bot_loop() -> None:
                     _aec = int(ind.get("above_ema_count") or 0)
                     _bec = int(ind.get("below_ema_count") or 0)
                     _vr = float(ind.get("volume_ratio") or 0.0)
+                    _adx = float(ind.get("adx") or 0.0)
+                    _dvwap = float(ind.get("distance_from_vwap_pct") or 0.0)
+                    _atr = float(ind.get("atr") or 0.0)
+                    _ascore = float(ind.get("auto_trade_score") or 0.0)
+                    _ht = ind.get("higher_tf_trend_detail")
+                    _trend = (_ht or {}).get("trend", "—")
+                    _e9 = float((_ht or {}).get("ema9") or 0.0)
                     logger.info(
                         "EMA_TRADE ENTRY %s %s entry=%.6f entry_reason=%s margin=%.4f lev=%d "
-                        "tp=%.6f sl=%.6f above_ema=%d below_ema=%d vol_ratio=%.4f",
+                        "tp=%.6f sl=%.6f above_ema=%d below_ema=%d vol_ratio=%.4f adx=%.2f "
+                        "dvwap=%.3f atr=%.6f auto_score=%.2f 15m_trend=%s 15m_ema9=%.2f",
                         sym,
                         side,
                         entry,
                         entry_reason,
                         notional,
-                        lev,
+                        trade_lev,
                         tp_p,
                         sl_p,
                         _aec,
                         _bec,
                         _vr,
+                        _adx,
+                        _dvwap,
+                        _atr,
+                        _ascore,
+                        _trend,
+                        _e9,
                     )
                 except Exception as e:
                     logger.exception("ema_scalper %s: %s", sym, e)

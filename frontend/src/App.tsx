@@ -16,6 +16,8 @@ import EMAPositionCard from "./components/ema_scalper/EMAPositionCard";
 import EMAStatsPanel from "./components/ema_scalper/EMAStatsPanel";
 import EMAMiniChart from "./components/ema_scalper/EMAMiniChart";
 import EMATradeLog from "./components/ema_scalper/EMATradeLog";
+import EMAEntryAnalytics from "./components/ema_scalper/EMAEntryAnalytics";
+import EMAAutoTunerPanel from "./components/ema_scalper/EMAAutoTunerPanel";
 import { useWebSocket } from "./hooks/useWebSocket";
 
 const ENTRY_Z = 1.5;
@@ -87,6 +89,8 @@ export default function App() {
         /** Пары из config.yaml (enabled) */
         enabled_symbols?: string[];
         max_open_positions?: number;
+        auto_tuner?: Record<string, unknown>;
+        auto_tuner_history?: Record<string, unknown>[];
       }
     | undefined;
 
@@ -260,6 +264,20 @@ export default function App() {
               <EMAStatusBar
                 indicators={(emaState?.indicators ?? {}) as Record<string, Record<string, unknown>>}
                 watchlist={emaState?.enabled_symbols ?? []}
+              />
+              <EMAEntryAnalytics
+                indicators={(emaState?.indicators ?? {}) as Record<string, Record<string, unknown>>}
+                watchlist={emaState?.enabled_symbols ?? []}
+              />
+              <EMAAutoTunerPanel
+                tuner={
+                  (emaState?.auto_tuner ?? {}) as React.ComponentProps<typeof EMAAutoTunerPanel>["tuner"]
+                }
+                history={
+                  (emaState?.auto_tuner_history ?? []) as React.ComponentProps<
+                    typeof EMAAutoTunerPanel
+                  >["history"]
+                }
               />
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
                 <EMAPositionCard positions={emaState?.positions ?? []} sendMessage={sendMessage} />
