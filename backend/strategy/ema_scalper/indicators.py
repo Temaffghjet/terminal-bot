@@ -124,6 +124,47 @@ def calc_adx(candles: list[dict[str, Any]], period: int = 14) -> float:
     return sum(dx[-period:]) / float(period)
 
 
+def calc_macd(
+    closes: list[float],
+    fast_period: int = 12,
+    slow_period: int = 26,
+    signal_period: int = 9,
+) -> dict[str, float]:
+    """Классический MACD (EMA fast - EMA slow) + signal + histogram."""
+    if len(closes) < max(slow_period + signal_period, 35):
+        return {"macd": 0.0, "macd_signal": 0.0, "macd_hist": 0.0, "macd_hist_prev": 0.0}
+    fast = calc_ema(closes, fast_period)
+    slow = calc_ema(closes, slow_period)
+    macd_line = [f - s for f, s in zip(fast, slow)]
+    signal_line = calc_ema(macd_line, signal_period)
+    if not macd_line or not signal_line:
+        return {"macd": 0.0, "macd_signal": 0.0, "macd_hist": 0.0, "macd_hist_prev": 0.0}
+    macd_now = float(macd_line[-1])
+    signal_now = float(signal_line[-1])
+    hist_now = macd_now - signal_now
+    hist_prev = float(macd_line[-2] - signal_line[-2]) if len(macd_line) >= 2 and len(signal_line) >= 2 else hist_now
+    return {
+        "macd": macd_now,
+        "macd_signal": signal_now,
+        "macd_hist": hist_now,
+        "macd_hist_prev": hist_prev,
+    }
+
+
+def calc_last_value_percentile(values: list[float], lookback: int = 40) -> float:
+    """
+    Перцентиль последнего значения внутри lookback окна в диапазоне [0, 100].
+    100 = максимум окна, 0 = минимум.
+    """
+    if len(values) < 2:
+        return 50.0
+    lb = min(max(2, lookback), len(values))
+    sl = values[-lb:]
+    last = sl[-1]
+    less_eq = sum(1 for v in sl if v <= last)
+    return (less_eq / float(lb)) * 100.0
+
+
 def compute_higher_tf_trend_from_ohlcv(ohlcv: list[Any]) -> dict[str, Any] | None:
     """
     Тренд старшего ТФ по закрытым свечам: последняя цена vs EMA(9) и EMA(21).
@@ -150,11 +191,18 @@ def compute_higher_tf_trend_from_ohlcv(ohlcv: list[Any]) -> dict[str, Any] | Non
         trend = "DOWN"
     else:
         trend = "FLAT"
+    volumes = [float(c[5]) for c in closed]
+    vol_ratio = 1.0
+    if len(volumes) >= 2:
+        lb = min(20, len(volumes) - 1)
+        vol_avg = sum(volumes[-lb - 1 : -1]) / float(lb)
+        vol_ratio = (volumes[-1] / vol_avg) if vol_avg > 1e-12 else 1.0
     return {
         "trend": trend,
         "close": close,
         "ema9": e9,
         "ema21": e21,
+        "volume_ratio": vol_ratio,
     }
 
 
@@ -232,7 +280,18 @@ def get_indicators(candles: list[dict[str, Any]], entry_cfg: dict[str, Any]) -> 
     adx_period = int(entry_cfg.get("adx_period", 14))
     atr_period = int(entry_cfg.get("atr_period", 14))
     vwap_lb = int(entry_cfg.get("vwap_lookback", 20))
-    min_required = max(ema_period + vol_lb + 2, rsi_period + 5, adx_period * 2 + 1, atr_period + 2, vwap_lb + 2)
+    vol_pct_lb = int(entry_cfg.get("volume_percentile_lookback", 40))
+    macd_fast = int(entry_cfg.get("macd_fast_period", 12))
+    macd_slow = int(entry_cfg.get("macd_slow_period", 26))
+    macd_signal = int(entry_cfg.get("macd_signal_period", 9))
+    min_required = max(
+        ema_period + vol_lb + 2,
+        rsi_period + 5,
+        adx_period * 2 + 1,
+        atr_period + 2,
+        vwap_lb + 2,
+        macd_slow + macd_signal + 2,
+    )
     if len(candles) < min_required:
         return {"warming_up": True}
 
@@ -245,6 +304,7 @@ def get_indicators(candles: list[dict[str, Any]], entry_cfg: dict[str, Any]) -> 
     vol_avg = sum(vols[-lb - 1 : -1]) / float(lb)
     vol_c = vols[-1]
     vol_ratio = vol_c / vol_avg if vol_avg > 1e-12 else 0.0
+    vol_percentile = calc_last_value_percentile(vols, lookback=vol_pct_lb)
 
     def count_above() -> int:
         cnt = 0
@@ -274,6 +334,7 @@ def get_indicators(candles: list[dict[str, Any]], entry_cfg: dict[str, Any]) -> 
     atr = calc_atr(candles, period=atr_period)
     vwap = calc_vwap(candles, lookback=vwap_lb)
     adx = calc_adx(candles, period=adx_period)
+    macd = calc_macd(closes, fast_period=macd_fast, slow_period=macd_slow, signal_period=macd_signal)
     atr_pct = atr / max(close, 1e-12) * 100.0
     dist_vwap_pct = abs(close - vwap) / max(vwap, 1e-12) * 100.0
     result: dict[str, Any] = {
@@ -284,6 +345,7 @@ def get_indicators(candles: list[dict[str, Any]], entry_cfg: dict[str, Any]) -> 
         "volume_current": vol_c,
         "volume_avg": vol_avg,
         "volume_ratio": vol_ratio,
+        "volume_percentile": vol_percentile,
         "above_ema_count": count_above(),
         "below_ema_count": count_below(),
         "is_green": close > open_,
@@ -299,5 +361,6 @@ def get_indicators(candles: list[dict[str, Any]], entry_cfg: dict[str, Any]) -> 
         "prev_close": prev_close,
         "distance_from_ema_pct": abs(close - float(ema[-1])) / max(float(ema[-1]), 1e-12) * 100.0,
     }
+    result.update(macd)
     result.update(momentum)
     return result

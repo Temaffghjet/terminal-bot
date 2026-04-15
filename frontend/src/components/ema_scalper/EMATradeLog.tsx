@@ -1,3 +1,4 @@
+import { useMemo, useState } from "react";
 import { emaEntryReasonHasMappedLabel, formatEmaEntryReason } from "./emaEntryReason";
 
 type Row = Record<string, unknown>;
@@ -14,10 +15,100 @@ export default function EMATradeLog({ trades }: { trades: Row[] }) {
   if (!trades.length) {
     return <div className="text-gray-500 text-xs p-2">Нет сделок в scalp_trades (ema)</div>;
   }
-  const wins = trades.filter((t) => Number(t.pnl_usdt ?? 0) > 0).length;
-  const totalPnl = trades.reduce((s, t) => s + Number(t.pnl_usdt ?? 0), 0);
+  const [selectedDate, setSelectedDate] = useState<string>("all");
+  const tradesWithDate = useMemo(
+    () =>
+      trades.map((t) => {
+        const ts = String(t.timestamp_close ?? t.timestamp_open ?? "");
+        return { row: t, date: ts.slice(0, 10) };
+      }),
+    [trades],
+  );
+  const dailyStats = useMemo(() => {
+    const m = new Map<string, { count: number; wins: number; pnl: number }>();
+    for (const x of tradesWithDate) {
+      if (!x.date) continue;
+      const pnl = Number(x.row.pnl_usdt ?? 0);
+      const cur = m.get(x.date) ?? { count: 0, wins: 0, pnl: 0 };
+      cur.count += 1;
+      if (pnl > 0) cur.wins += 1;
+      cur.pnl += pnl;
+      m.set(x.date, cur);
+    }
+    return [...m.entries()]
+      .sort((a, b) => b[0].localeCompare(a[0]))
+      .map(([date, v]) => ({
+        date,
+        count: v.count,
+        winRate: v.count ? (v.wins / v.count) * 100 : 0,
+        pnl: v.pnl,
+      }));
+  }, [tradesWithDate]);
+  const filteredTrades = useMemo(
+    () => (selectedDate === "all" ? trades : tradesWithDate.filter((x) => x.date === selectedDate).map((x) => x.row)),
+    [selectedDate, trades, tradesWithDate],
+  );
+  const wins = filteredTrades.filter((t) => Number(t.pnl_usdt ?? 0) > 0).length;
+  const totalPnl = filteredTrades.reduce((s, t) => s + Number(t.pnl_usdt ?? 0), 0);
+  const exportCsv = () => {
+    const headers = [
+      "timestamp_close",
+      "symbol",
+      "side",
+      "entry_reason",
+      "close_reason",
+      "leverage",
+      "size_usdt",
+      "notional",
+      "entry_price",
+      "exit_price",
+      "candles_held",
+      "pnl_usdt",
+      "pnl_pct",
+    ];
+    const rows = filteredTrades.map((t) =>
+      headers.map((k) => {
+        const raw = String((t as Record<string, unknown>)[k] ?? "");
+        const safe = raw.replace(/"/g, '""');
+        return `"${safe}"`;
+      }),
+    );
+    const csv = [headers.join(","), ...rows.map((r) => r.join(","))].join("\n");
+    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    const d = selectedDate === "all" ? "all" : selectedDate;
+    a.href = url;
+    a.download = `ema_trades_${d}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
   return (
     <div className="flex flex-col max-h-[220px] border border-gray-800 rounded">
+      <div className="px-2 py-1 border-b border-gray-800 bg-terminal-bg text-[10px] flex flex-wrap items-center gap-2">
+        <span className="text-gray-500">Дата:</span>
+        <select
+          className="bg-gray-900 border border-gray-700 rounded px-1 py-0.5"
+          value={selectedDate}
+          onChange={(e) => setSelectedDate(e.target.value)}
+        >
+          <option value="all">Все</option>
+          {dailyStats.map((d) => (
+            <option key={d.date} value={d.date}>
+              {d.date}
+            </option>
+          ))}
+        </select>
+        <button
+          type="button"
+          onClick={exportCsv}
+          className="ml-auto border border-gray-700 hover:border-emerald-600 rounded px-2 py-0.5 text-emerald-300"
+        >
+          Экспорт CSV (Excel)
+        </button>
+      </div>
       <div className="overflow-auto flex-1">
         <table className="w-full text-[10px] text-left">
           <thead className="sticky top-0 bg-terminal-bg text-gray-500 border-b border-gray-800">
@@ -49,7 +140,7 @@ export default function EMATradeLog({ trades }: { trades: Row[] }) {
             </tr>
           </thead>
           <tbody>
-            {trades.map((t) => {
+            {filteredTrades.map((t) => {
               const closeReason = String(t.close_reason ?? "");
               const rc = reasonClass[closeReason] ?? "bg-gray-800 text-gray-300";
               const entryReasonRaw = String(t.entry_reason ?? "").trim();
@@ -105,9 +196,20 @@ export default function EMATradeLog({ trades }: { trades: Row[] }) {
         </table>
       </div>
       <div className="sticky bottom-0 border-t border-gray-800 bg-terminal-bg px-2 py-1 text-[10px] text-gray-400 flex flex-wrap gap-2">
-        <span>Всего: {trades.length}</span>
-        <span>Win: {trades.length ? ((wins / trades.length) * 100).toFixed(0) : 0}%</span>
+        <span>Всего: {filteredTrades.length}</span>
+        <span>Win: {filteredTrades.length ? ((wins / filteredTrades.length) * 100).toFixed(0) : 0}%</span>
         <span>P&amp;L: ${totalPnl.toFixed(2)}</span>
+      </div>
+      <div className="border-t border-gray-800 bg-[#0a0a12] px-2 py-1 text-[10px] text-gray-400">
+        <div className="mb-1 text-gray-500">Статистика по дням:</div>
+        <div className="flex flex-wrap gap-x-3 gap-y-1">
+          {dailyStats.slice(0, 8).map((d) => (
+            <span key={d.date}>
+              {d.date}: {d.count} сделок, Win {d.winRate.toFixed(0)}%, P&amp;L {d.pnl >= 0 ? "+" : ""}
+              {d.pnl.toFixed(2)}
+            </span>
+          ))}
+        </div>
       </div>
     </div>
   );

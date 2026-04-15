@@ -39,6 +39,13 @@ class EMAScalpSignalEngine:
         self.adx_enabled = bool(ent.get("adx_filter_enabled", True))
         self.adx_threshold = float(ent.get("adx_threshold", 20.0))
         self.vwap_max_dist_pct = float(ent.get("vwap_max_distance_pct", 0.9))
+        self.macd_enabled = bool(ent.get("macd_filter_enabled", True))
+        self.macd_need_hist_rising = bool(ent.get("macd_hist_rising_required", True))
+        self.min_volume_pct_rank = float(ent.get("min_volume_percentile", 60.0))
+        self.volume_percentile_lb = int(ent.get("volume_percentile_lookback", 40))
+        self.higher_tf_min_volume_ratio = float(ent.get("higher_tf_min_volume_ratio", 1.0))
+        self.anti_flat_enabled = bool(ent.get("anti_flat_enabled", True))
+        self.anti_flat_min_atr_pct = float(ent.get("anti_flat_min_atr_pct", 0.15))
         # strict = расширение дистанции до EMA (агрессивно, часто поздно); loose = тело+направление
         self.momentum_mode = str(ent.get("momentum_mode", "strict")).strip().lower()
         # 0 = выкл.; иначе не входить, если цена слишком далеко от EMA на 5m (% от цены)
@@ -87,6 +94,9 @@ class EMAScalpSignalEngine:
         dvwap = float(ind.get("distance_from_vwap_pct", 0.0))
         if self.vwap_max_dist_pct > 0 and dvwap > self.vwap_max_dist_pct:
             return {"action": "HOLD", "reason": "vwap_stretched", "indicators": ind}
+        atr_pct = float(ind.get("atr_pct", 0.0))
+        if self.anti_flat_enabled and atr_pct < self.anti_flat_min_atr_pct:
+            return {"action": "HOLD", "reason": "flat_market", "indicators": ind}
         ht = ind.get("higher_tf_trend")
         if ht is None:
             return {"action": "HOLD", "reason": "higher_tf_unavailable", "indicators": ind}
@@ -102,6 +112,12 @@ class EMAScalpSignalEngine:
         vr = float(ind.get("volume_ratio", 0))
         if vr < self.vol_mult:
             return {"action": "HOLD", "reason": "volume_filter", "indicators": ind}
+        v_rank = float(ind.get("volume_percentile", 0.0))
+        if self.min_volume_pct_rank > 0 and v_rank < self.min_volume_pct_rank:
+            return {"action": "HOLD", "reason": "low_volume_percentile", "indicators": ind}
+        htf_vr = float(ind.get("higher_tf_volume_ratio", 0.0))
+        if self.higher_tf_min_volume_ratio > 0 and htf_vr < self.higher_tf_min_volume_ratio:
+            return {"action": "HOLD", "reason": "thin_higher_tf_volume", "indicators": ind}
         if last_entry_ts_ms is not None:
             if current_bar_ts_ms - last_entry_ts_ms < self.cooldown_ms:
                 return {"action": "HOLD", "reason": "cooldown", "indicators": ind}
@@ -112,6 +128,10 @@ class EMAScalpSignalEngine:
         be = int(ind["below_ema_count"])
         rsi = float(ind.get("rsi", 50.0))
         body_pct = float(ind.get("candle_body_pct", 0.0))
+        macd = float(ind.get("macd", 0.0))
+        macd_signal = float(ind.get("macd_signal", 0.0))
+        macd_hist = float(ind.get("macd_hist", 0.0))
+        macd_hist_prev = float(ind.get("macd_hist_prev", 0.0))
 
         # Перегрев: слишком долго подряд у EMA — не догонять
         if close > ema and ae > self.max_streak:
@@ -145,6 +165,11 @@ class EMAScalpSignalEngine:
         if long_setup:
             if ht != "UP":
                 return {"action": "HOLD", "reason": "against_higher_tf", "indicators": ind}
+            if self.macd_enabled:
+                if not (macd > macd_signal and macd_hist > 0):
+                    return {"action": "HOLD", "reason": "macd_not_confirmed", "indicators": ind}
+                if self.macd_need_hist_rising and macd_hist < macd_hist_prev:
+                    return {"action": "HOLD", "reason": "macd_hist_fading", "indicators": ind}
             if rsi > self.rsi_long_max:
                 return {"action": "HOLD", "reason": "rsi_overbought", "indicators": ind}
             if body_pct < self.min_candle_body_pct:
@@ -154,6 +179,11 @@ class EMAScalpSignalEngine:
         if short_setup:
             if ht != "DOWN":
                 return {"action": "HOLD", "reason": "against_higher_tf", "indicators": ind}
+            if self.macd_enabled:
+                if not (macd < macd_signal and macd_hist < 0):
+                    return {"action": "HOLD", "reason": "macd_not_confirmed", "indicators": ind}
+                if self.macd_need_hist_rising and macd_hist > macd_hist_prev:
+                    return {"action": "HOLD", "reason": "macd_hist_fading", "indicators": ind}
             if rsi < self.rsi_short_min:
                 return {"action": "HOLD", "reason": "rsi_oversold", "indicators": ind}
             if body_pct < self.min_candle_body_pct:
@@ -184,7 +214,8 @@ class EMAScalpSignalEngine:
         if pnl <= -self.sl_pct:
             return {"should_exit": True, "reason": "SL", "pnl_pct": pnl}
         bars = pos.bars_held(current_bar_ts_ms)
-        if bars >= self.max_hold:
+        hold_limit = int(getattr(pos, "max_hold_candles", self.max_hold) or self.max_hold)
+        if bars >= hold_limit:
             return {"should_exit": True, "reason": "TIME", "pnl_pct": pnl}
         if self.ema_cross_exit:
             ema = float(ind["ema_current"])
@@ -213,18 +244,31 @@ class EMAScalpSignalEngine:
         dvwap = float(ind.get("distance_from_vwap_pct", 0.0))
         if self.vwap_max_dist_pct > 0 and dvwap > self.vwap_max_dist_pct:
             return {"signal_ready": False, "side_ready": None, "reason": "vwap_stretched"}
+        atr_pct = float(ind.get("atr_pct", 0.0))
+        if self.anti_flat_enabled and atr_pct < self.anti_flat_min_atr_pct:
+            return {"signal_ready": False, "side_ready": None, "reason": "flat_market"}
         h = datetime.now(timezone.utc).hour
         if h in self.no_trade_hours:
             return {"signal_ready": False, "side_ready": None, "reason": "no_trade_hour"}
         vr = float(ind.get("volume_ratio", 0))
         if vr < self.vol_mult:
             return {"signal_ready": False, "side_ready": None, "reason": "volume_filter"}
+        v_rank = float(ind.get("volume_percentile", 0.0))
+        if self.min_volume_pct_rank > 0 and v_rank < self.min_volume_pct_rank:
+            return {"signal_ready": False, "side_ready": None, "reason": "low_volume_percentile"}
+        htf_vr = float(ind.get("higher_tf_volume_ratio", 0.0))
+        if self.higher_tf_min_volume_ratio > 0 and htf_vr < self.higher_tf_min_volume_ratio:
+            return {"signal_ready": False, "side_ready": None, "reason": "thin_higher_tf_volume"}
         ema = float(ind["ema_current"])
         close = float(ind["close"])
         ae = int(ind["above_ema_count"])
         be = int(ind["below_ema_count"])
         rsi = float(ind.get("rsi", 50.0))
         body_pct = float(ind.get("candle_body_pct", 0.0))
+        macd = float(ind.get("macd", 0.0))
+        macd_signal = float(ind.get("macd_signal", 0.0))
+        macd_hist = float(ind.get("macd_hist", 0.0))
+        macd_hist_prev = float(ind.get("macd_hist_prev", 0.0))
         if close > ema and ae > self.max_streak:
             return {"signal_ready": False, "side_ready": None, "reason": "ema_overextended"}
         if close < ema and be > self.max_streak:
@@ -256,6 +300,11 @@ class EMAScalpSignalEngine:
         if long_setup:
             if ht != "UP":
                 return {"signal_ready": False, "side_ready": None, "reason": "against_higher_tf"}
+            if self.macd_enabled:
+                if not (macd > macd_signal and macd_hist > 0):
+                    return {"signal_ready": False, "side_ready": None, "reason": "macd_not_confirmed"}
+                if self.macd_need_hist_rising and macd_hist < macd_hist_prev:
+                    return {"signal_ready": False, "side_ready": None, "reason": "macd_hist_fading"}
             if rsi > self.rsi_long_max:
                 return {"signal_ready": False, "side_ready": None, "reason": "rsi_overbought"}
             if body_pct < self.min_candle_body_pct:
@@ -265,6 +314,11 @@ class EMAScalpSignalEngine:
         if short_setup:
             if ht != "DOWN":
                 return {"signal_ready": False, "side_ready": None, "reason": "against_higher_tf"}
+            if self.macd_enabled:
+                if not (macd < macd_signal and macd_hist < 0):
+                    return {"signal_ready": False, "side_ready": None, "reason": "macd_not_confirmed"}
+                if self.macd_need_hist_rising and macd_hist > macd_hist_prev:
+                    return {"signal_ready": False, "side_ready": None, "reason": "macd_hist_fading"}
             if rsi < self.rsi_short_min:
                 return {"signal_ready": False, "side_ready": None, "reason": "rsi_oversold"}
             if body_pct < self.min_candle_body_pct:

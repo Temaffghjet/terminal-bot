@@ -1461,19 +1461,27 @@ async def ema_scalper_bot_loop() -> None:
     lev = int(rk_es.get("leverage", 5))
     pos_pct = float(rk_es.get("position_size_pct", 25)) / 100.0
     ex_cfg = es.get("exit") or {}
-    tp_pct = float(ex_cfg.get("take_profit_pct", 1.5))
-    sl_pct = float(ex_cfg.get("stop_loss_pct", 0.5))
-    use_atr_targets = bool(ex_cfg.get("use_atr_targets", True))
-    tp_atr_mult = float(ex_cfg.get("tp_atr_mult", 1.8))
-    sl_atr_mult = float(ex_cfg.get("sl_atr_mult", 1.0))
-    max_hold = int(ex_cfg.get("max_hold_candles", 12))
     tf_ms = int(float(ex.parse_timeframe(tf)) * 1000)
     pairs = [p for p in es.get("pairs", []) if p.get("enabled")]
+    last_dep_snapshot: tuple[float, bool, float] | None = None
     while not RT._shutdown:
         try:
             cap = await build_trading_capital_payload(RT)
             ex_map = cap.get("exchange_usdt") or {}
             dep = effective_ema_deposit_usdt(ex_map, rk_es)
+            use_ex_balance = bool(rk_es.get("use_exchange_balance", False))
+            cfg_dep = float(rk_es.get("balance_usdt", 50) or 50)
+            dep_snapshot = (round(dep, 4), use_ex_balance, round(cfg_dep, 4))
+            if dep_snapshot != last_dep_snapshot:
+                src = "exchange_balance" if use_ex_balance else "config_balance_usdt"
+                logger.info(
+                    "EMA_DEPOSIT effective=%.4f source=%s config_balance=%.4f use_exchange_balance=%s",
+                    dep,
+                    src,
+                    cfg_dep,
+                    use_ex_balance,
+                )
+                last_dep_snapshot = dep_snapshot
             base_min_score = float(auto_cfg.get("min_score_to_trade", 62.0))
             dyn_min_score = (
                 _ema_auto_dynamic_min_score(RT.conn, auto_cfg, base_min_score)
@@ -1508,6 +1516,13 @@ async def ema_scalper_bot_loop() -> None:
                 sym = pr["symbol"]
                 await asyncio.sleep(0.15)
                 try:
+                    pair_exit_cfg = {**ex_cfg, **(pr.get("exit") or {})}
+                    pair_tp_pct = float(pair_exit_cfg.get("take_profit_pct", 1.5))
+                    pair_sl_pct = float(pair_exit_cfg.get("stop_loss_pct", 0.5))
+                    pair_use_atr_targets = bool(pair_exit_cfg.get("use_atr_targets", True))
+                    pair_tp_atr_mult = float(pair_exit_cfg.get("tp_atr_mult", 1.8))
+                    pair_sl_atr_mult = float(pair_exit_cfg.get("sl_atr_mult", 1.0))
+                    pair_max_hold = int(pair_exit_cfg.get("max_hold_candles", 12))
                     try:
                         raw = await asyncio.wait_for(
                             asyncio.to_thread(ex.fetch_ohlcv, sym, tf, None, 80),
@@ -1547,15 +1562,17 @@ async def ema_scalper_bot_loop() -> None:
                         if ht_detail:
                             ind["higher_tf_trend"] = ht_detail["trend"]
                             ind["higher_tf_trend_detail"] = ht_detail
+                            ind["higher_tf_volume_ratio"] = float(ht_detail.get("volume_ratio") or 0.0)
                         else:
                             ind["higher_tf_trend"] = None
                             ind["higher_tf_trend_detail"] = None
+                            ind["higher_tf_volume_ratio"] = 0.0
                     auto_profile = (
                         _ema_auto_trade_profile(
                             ind,
                             dep,
                             rk_es,
-                            ex_cfg,
+                            pair_exit_cfg,
                             {**auto_cfg, "min_score_to_trade": dyn_min_score},
                             lev,
                             pos_pct,
@@ -1655,22 +1672,22 @@ async def ema_scalper_bot_loop() -> None:
                         else dep * pos_pct
                     )
                     trade_lev = int(auto_profile["leverage"]) if auto_profile else lev
-                    trade_tp_pct = float(auto_profile["tp_pct"]) if auto_profile else tp_pct
-                    trade_sl_pct = float(auto_profile["sl_pct"]) if auto_profile else sl_pct
+                    trade_tp_pct = float(auto_profile["tp_pct"]) if auto_profile else pair_tp_pct
+                    trade_sl_pct = float(auto_profile["sl_pct"]) if auto_profile else pair_sl_pct
                     trade_use_atr_targets = (
-                        bool(auto_profile.get("use_atr_targets", use_atr_targets))
+                        bool(auto_profile.get("use_atr_targets", pair_use_atr_targets))
                         if auto_profile
-                        else use_atr_targets
+                        else pair_use_atr_targets
                     )
                     trade_tp_atr_mult = (
-                        float(auto_profile.get("tp_atr_mult", tp_atr_mult))
+                        float(auto_profile.get("tp_atr_mult", pair_tp_atr_mult))
                         if auto_profile
-                        else tp_atr_mult
+                        else pair_tp_atr_mult
                     )
                     trade_sl_atr_mult = (
-                        float(auto_profile.get("sl_atr_mult", sl_atr_mult))
+                        float(auto_profile.get("sl_atr_mult", pair_sl_atr_mult))
                         if auto_profile
-                        else sl_atr_mult
+                        else pair_sl_atr_mult
                     )
                     ok, _ = RT.risk.check_can_open(f"ema:{sym}", notional, legs=1) if RT.risk else (True, "")
                     logger.debug(
@@ -1733,7 +1750,7 @@ async def ema_scalper_bot_loop() -> None:
                         leverage=trade_lev,
                         tp_price=tp_p,
                         sl_price=sl_p,
-                        max_hold_candles=max_hold,
+                        max_hold_candles=pair_max_hold,
                         entry_ts_ms=bar_ts,
                         tf_ms=tf_ms,
                         ema_at_entry=float(ind.get("ema_current") or 0.0),

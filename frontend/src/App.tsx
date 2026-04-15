@@ -264,6 +264,10 @@ export default function App() {
               <EMAStatusBar
                 indicators={(emaState?.indicators ?? {}) as Record<string, Record<string, unknown>>}
                 watchlist={emaState?.enabled_symbols ?? []}
+                depositMeta={{
+                  useExchangeBalance: Boolean(tradingCapital?.config?.ema_use_exchange_balance),
+                  balanceUsdt: Number(tradingCapital?.config?.ema_balance_usdt ?? 0),
+                }}
               />
               <EMAEntryAnalytics
                 indicators={(emaState?.indicators ?? {}) as Record<string, Record<string, unknown>>}
