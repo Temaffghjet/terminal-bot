@@ -1,6 +1,7 @@
 import { formatEmaEntryReason } from "./emaEntryReason";
 
 type Pos = {
+  profile_id?: string;
   symbol: string;
   side: string;
   entry_price: number;
@@ -70,7 +71,7 @@ export default function EMAPositionCard({
         const erLabel = formatEmaEntryReason(er);
         return (
           <div
-            key={p.symbol}
+            key={`${p.profile_id ?? "base"}:${p.symbol}`}
             className="border border-gray-800 rounded p-3 bg-terminal-bg/80 text-xs"
           >
             <div className="flex justify-between mb-2">
@@ -128,7 +129,12 @@ export default function EMAPositionCard({
               <button
                 type="button"
                 className="px-2 py-1 border border-rose-700 text-rose-400 rounded text-[10px]"
-                onClick={() => sendMessage({ action: "close_ema_scalp", symbol: p.symbol })}
+                onClick={() =>
+                  sendMessage({
+                    action: "close_ema_scalp",
+                    symbol: `${p.profile_id ?? "base"}|${p.symbol}`,
+                  })
+                }
               >
                 ✕ Закрыть
               </button>

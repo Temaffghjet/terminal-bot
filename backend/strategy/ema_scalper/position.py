@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 @dataclass
 class EMAScalpPosition:
+    profile_id: str
     symbol: str
     side: str
     entry_price: float
@@ -66,6 +67,7 @@ class EMAScalpPosition:
         gross_usdt = sign * (self.current_price - self.entry_price) * self.position_qty()
         fee_est = self.notional * 0.0001 * 2.0
         return {
+            "profile_id": self.profile_id,
             "symbol": self.symbol,
             "side": self.side,
             "entry_price": self.entry_price,

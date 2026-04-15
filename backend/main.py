@@ -64,6 +64,17 @@ def scalp_id(symbol: str) -> str:
     return f"scalp:{symbol}"
 
 
+def ema_pos_key(profile_id: str, symbol: str) -> str:
+    return f"{profile_id}|{symbol}"
+
+
+def ema_split_key(key: str) -> tuple[str, str]:
+    if "|" not in key:
+        return "base", key
+    a, b = key.split("|", 1)
+    return a or "base", b
+
+
 class BotRuntime:
     def __init__(self) -> None:
         self.config: dict = {}
@@ -120,7 +131,8 @@ class BotRuntime:
         for sym, pos in list(self.pm.scalp_all().items()):
             await self._close_scalp(sym, pos, "emergency")
         ex_ema = self.ema_scalper_exchange or self.exchange
-        for sym, pos in list(self.ema_positions.items()):
+        for key, pos in list(self.ema_positions.items()):
+            _, sym = ema_split_key(key)
             t = await asyncio.to_thread(ex_ema.fetch_ticker, sym) if ex_ema else None
             px = float(t["last"] or t["close"] or pos.entry_price) if t else pos.entry_price
             await self._close_ema_scalp(sym, pos, px, "MANUAL", bar_ts_ms=int(time.time() * 1000))
@@ -163,8 +175,17 @@ class BotRuntime:
         if pos and self.orders:
             await self._close_one(pair_id, pos, "manual")
 
-    async def close_ema_manual(self, symbol: str) -> None:
-        pos = self.ema_positions.get(symbol)
+    async def close_ema_manual(self, symbol: str, profile_id: str | None = None) -> None:
+        if "|" in symbol and profile_id is None:
+            profile_id, symbol = ema_split_key(symbol)
+        key = ema_pos_key(profile_id or "base", symbol) if profile_id else None
+        pos = self.ema_positions.get(key) if key else None
+        if pos is None:
+            for k, p in self.ema_positions.items():
+                _, s = ema_split_key(k)
+                if s == symbol:
+                    key, pos = k, p
+                    break
         if not pos or not (self.orders_ema or self.orders):
             return
         ex = self.ema_scalper_exchange or self.exchange
@@ -291,7 +312,8 @@ class BotRuntime:
             self.risk.add_commission(fee)
         net = gross - fee
         self.pm.add_realized_today(net)
-        self.ema_positions.pop(symbol, None)
+        key = ema_pos_key(str(getattr(pos, "profile_id", "base")), symbol)
+        self.ema_positions.pop(key, None)
         ts_close = datetime.now(timezone.utc).isoformat()
         bms = bar_ts_ms if bar_ts_ms is not None else int(time.time() * 1000)
         bars = pos.bars_held(bms)
@@ -303,7 +325,7 @@ class BotRuntime:
                     "timestamp_open": pos.timestamp_open_iso or ts_close,
                     "timestamp_close": ts_close,
                     "symbol": symbol,
-                    "strategy": "ema_scalper",
+                    "strategy": f"ema_scalper:{getattr(pos, 'profile_id', 'base')}",
                     "side": pos.side,
                     "entry_price": entry,
                     "exit_price": exit_px,
@@ -334,7 +356,11 @@ class BotRuntime:
             )
         finally:
             if dry_e and self.conn:
-                dbmod.delete_ema_sim_open(self.conn, symbol)
+                dbmod.delete_ema_sim_open(
+                    self.conn,
+                    symbol,
+                    profile_id=str(getattr(pos, "profile_id", "base")),
+                )
 
     def _log_breakout_scalp_trade(self, rec: dict, reason: str) -> None:
         """Запись закрытия breakout в scalp_trades (не stat-arb trades)."""
@@ -692,6 +718,45 @@ def effective_ema_deposit_usdt(exchange_usdt: dict | None, es_risk: dict) -> flo
     return _ema_fallback_balance_usdt(es_risk)
 
 
+def _ema_profile_configs(es_cfg: dict) -> list[dict]:
+    """Возвращает список профилей EMA (base + overrides)."""
+    profiles_raw = es_cfg.get("profiles")
+    if isinstance(profiles_raw, list) and profiles_raw:
+        out: list[dict] = []
+        for i, p in enumerate(profiles_raw):
+            if not isinstance(p, dict):
+                continue
+            pid = str(p.get("id") or f"cfg{i+1}")
+            out.append(
+                {
+                    "id": pid,
+                    "label": str(p.get("label") or pid.upper()),
+                    "timeframe": str(p.get("timeframe") or es_cfg.get("timeframe", "5m")),
+                    "pairs": p.get("pairs") if isinstance(p.get("pairs"), list) else (es_cfg.get("pairs") or []),
+                    "entry": {**(es_cfg.get("entry") or {}), **(p.get("entry") or {})},
+                    "exit": {**(es_cfg.get("exit") or {}), **(p.get("exit") or {})},
+                    "risk": {**(es_cfg.get("risk") or {}), **(p.get("risk") or {})},
+                    "auto": {**(es_cfg.get("auto") or {}), **(p.get("auto") or {})},
+                    "dry_run": bool(p.get("dry_run", es_cfg.get("dry_run", True))),
+                }
+            )
+        if out:
+            return out
+    return [
+        {
+            "id": "base",
+            "label": "BASE",
+            "timeframe": str(es_cfg.get("timeframe", "5m")),
+            "pairs": es_cfg.get("pairs") or [],
+            "entry": es_cfg.get("entry") or {},
+            "exit": es_cfg.get("exit") or {},
+            "risk": es_cfg.get("risk") or {},
+            "auto": es_cfg.get("auto") or {},
+            "dry_run": bool(es_cfg.get("dry_run", True)),
+        }
+    ]
+
+
 def _ema_auto_trade_profile(
     ind: dict,
     dep_usdt: float,
@@ -1023,6 +1088,7 @@ async def build_state_payload(rt: BotRuntime, metrics_by_pair: dict | None = Non
     br_cfg = (rt.config.get("breakout") or {}) if rt.config else {}
     br_dep = float((br_cfg.get("risk") or {}).get("balance_usdt", 1000))
     es_cfg_rt = (rt.config.get("ema_scalper") or {}) if rt.config else {}
+    ema_profiles_cfg = _ema_profile_configs(es_cfg_rt) if es_cfg_rt else []
     es_dep = float((es_cfg_rt.get("risk") or {}).get("balance_usdt", 50))
     es_auto = (es_cfg_rt.get("auto") or {}) if es_cfg_rt else {}
     base_min_score = float(es_auto.get("min_score_to_trade", 62.0))
@@ -1032,12 +1098,54 @@ async def build_state_payload(rt: BotRuntime, metrics_by_pair: dict | None = Non
     br_st: dict = {}
     ema_st: dict = {}
     recent_ema_trades: list = []
+    ema_profiles_state: dict[str, dict] = {}
     if rt.conn:
         breakout_equity = dbmod.get_equity_history(rt.conn, "breakout", br_dep, 100)
         ema_equity = dbmod.get_equity_history(rt.conn, "ema_scalper", es_dep, 100)
         br_st = dbmod.fetch_scalp_strategy_stats(rt.conn, "breakout")
-        ema_st = dbmod.fetch_scalp_strategy_stats(rt.conn, "ema_scalper")
-        recent_ema_trades = dbmod.get_recent_scalp_trades(rt.conn, 50, strategy="ema_scalper")
+        ema_st = dbmod.fetch_scalp_strategy_stats(rt.conn, "ema_scalper:base")
+        if not ema_profiles_cfg:
+            ema_profiles_cfg = [{"id": "base", "label": "BASE", "pairs": es_cfg_rt.get("pairs") or []}]
+        for p in ema_profiles_cfg:
+            pid = str(p.get("id") or "base")
+            strat = f"ema_scalper:{pid}"
+            p_dep = float((p.get("risk") or {}).get("balance_usdt", es_dep))
+            p_stats = dbmod.fetch_scalp_strategy_stats(rt.conn, strat)
+            p_trades = dbmod.get_recent_scalp_trades(rt.conn, 50, strategy=strat)
+            p_eq = dbmod.get_equity_history(rt.conn, strat, p_dep, 100)
+            p_positions = [
+                pos.to_dict(current_bar_ts_ms=rt.ema_current_bar_ts.get(ema_pos_key(pid, sym)))
+                for k, pos in rt.ema_positions.items()
+                for (pp, sym) in [ema_split_key(k)]
+                if pp == pid
+            ]
+            p_ind = {
+                sym: v
+                for k, v in rt.ema_indicators.items()
+                for (pp, sym) in [ema_split_key(k)]
+                if pp == pid
+            }
+            p_chart = {
+                sym: v
+                for k, v in rt.ema_chart_history.items()
+                for (pp, sym) in [ema_split_key(k)]
+                if pp == pid
+            }
+            ema_profiles_state[pid] = {
+                "id": pid,
+                "label": str(p.get("label") or pid.upper()),
+                "positions": p_positions,
+                "indicators": p_ind,
+                "stats": p_stats,
+                "candle_history": p_chart,
+                "recent_trades": p_trades,
+                "equity_history": p_eq,
+                "enabled_symbols": [x["symbol"] for x in (p.get("pairs") or []) if x.get("enabled")],
+                "max_open_positions": int((p.get("risk") or {}).get("max_open_positions", 2)),
+            }
+        if "base" in ema_profiles_state:
+            ema_st = ema_profiles_state["base"]["stats"]
+            recent_ema_trades = ema_profiles_state["base"]["recent_trades"]
     today_stats = (
         dbmod.fetch_scalp_today_stats(rt.conn)
         if rt.conn and mode == "scalping"
@@ -1092,12 +1200,23 @@ async def build_state_payload(rt: BotRuntime, metrics_by_pair: dict | None = Non
         "ema_scalper": {
             "status": rt.bot_status,
             "positions": [
-                p.to_dict(current_bar_ts_ms=rt.ema_current_bar_ts.get(sym))
-                for sym, p in rt.ema_positions.items()
+                p.to_dict(current_bar_ts_ms=rt.ema_current_bar_ts.get(k))
+                for k, p in rt.ema_positions.items()
+                if str(getattr(p, "profile_id", "base")) == "base"
             ],
-            "indicators": dict(rt.ema_indicators),
+            "indicators": {
+                sym: v
+                for k, v in rt.ema_indicators.items()
+                for (pid, sym) in [ema_split_key(k)]
+                if pid == "base"
+            },
             "stats": ema_st,
-            "candle_history": dict(rt.ema_chart_history),
+            "candle_history": {
+                sym: v
+                for k, v in rt.ema_chart_history.items()
+                for (pid, sym) in [ema_split_key(k)]
+                if pid == "base"
+            },
             "recent_trades": recent_ema_trades,
             "equity_history": ema_equity,
             "enabled_symbols": [
@@ -1106,6 +1225,7 @@ async def build_state_payload(rt: BotRuntime, metrics_by_pair: dict | None = Non
             "max_open_positions": int((es_cfg_rt.get("risk") or {}).get("max_open_positions", 2)),
             "auto_tuner": auto_tuner,
             "auto_tuner_history": list(rt.ema_auto_tuner_history),
+            "profiles": ema_profiles_state,
         },
         "pnl": pnl,
         "trades_recent": dbmod.fetch_trades_last_n(rt.conn, 20) if rt.conn else [],
@@ -1447,355 +1567,167 @@ async def ema_scalper_bot_loop() -> None:
     cfg = RT.config
     es = cfg.get("ema_scalper") or {}
     ex = RT.ema_scalper_exchange or RT.exchange
-    eng = RT.ema_scalper_engine
     om = RT.orders_ema or RT.orders
-    if not eng or not om:
+    if not om:
         return
-    tf = es.get("timeframe", "5m")
     loop_sec = float((es.get("bot") or {}).get("loop_interval_sec", 10))
-    ent_cfg = es.get("entry") or {}
-    rk_es = es.get("risk") or {}
-    auto_cfg = es.get("auto") or {}
-    auto_enabled = bool(auto_cfg.get("enabled", False))
-    dry_es = bool(es.get("dry_run", (cfg.get("bot") or {}).get("dry_run", True)))
-    lev = int(rk_es.get("leverage", 5))
-    pos_pct = float(rk_es.get("position_size_pct", 25)) / 100.0
-    ex_cfg = es.get("exit") or {}
-    tf_ms = int(float(ex.parse_timeframe(tf)) * 1000)
-    pairs = [p for p in es.get("pairs", []) if p.get("enabled")]
-    last_dep_snapshot: tuple[float, bool, float] | None = None
+    profiles = _ema_profile_configs(es)
+    last_dep_snapshot: dict[str, tuple[float, bool, float]] = {}
     while not RT._shutdown:
         try:
             cap = await build_trading_capital_payload(RT)
             ex_map = cap.get("exchange_usdt") or {}
-            dep = effective_ema_deposit_usdt(ex_map, rk_es)
-            use_ex_balance = bool(rk_es.get("use_exchange_balance", False))
-            cfg_dep = float(rk_es.get("balance_usdt", 50) or 50)
-            dep_snapshot = (round(dep, 4), use_ex_balance, round(cfg_dep, 4))
-            if dep_snapshot != last_dep_snapshot:
-                src = "exchange_balance" if use_ex_balance else "config_balance_usdt"
-                logger.info(
-                    "EMA_DEPOSIT effective=%.4f source=%s config_balance=%.4f use_exchange_balance=%s",
-                    dep,
-                    src,
-                    cfg_dep,
-                    use_ex_balance,
-                )
-                last_dep_snapshot = dep_snapshot
-            base_min_score = float(auto_cfg.get("min_score_to_trade", 62.0))
-            dyn_min_score = (
-                _ema_auto_dynamic_min_score(RT.conn, auto_cfg, base_min_score)
-                if auto_enabled
-                else base_min_score
-            )
-            if auto_enabled:
-                state_now = _ema_auto_tuner_state(RT.conn, auto_cfg, base_min_score)
-                dyn_now = float(state_now.get("dynamic_min_score") or dyn_min_score)
-                if RT.ema_auto_tuner_last_dyn_score is None or abs(dyn_now - RT.ema_auto_tuner_last_dyn_score) > 1e-9:
-                    RT.ema_auto_tuner_history.append(
-                        {
-                            "ts": datetime.now(timezone.utc).isoformat(),
-                            "base_min_score": float(state_now.get("base_min_score") or base_min_score),
-                            "dynamic_min_score": dyn_now,
-                            "winrate": float(state_now.get("winrate") or 0.0),
-                            "profit_factor": float(state_now.get("profit_factor") or 0.0),
-                            "samples": int(state_now.get("samples") or 0),
-                            "decision": str(state_now.get("decision") or "keep_threshold"),
-                        }
-                    )
-                    RT.ema_auto_tuner_last_dyn_score = dyn_now
-            top_n = int(auto_cfg.get("top_n_candidates", 0)) if auto_enabled else 0
             if RT.risk:
-                ema_exp = sum(
-                    abs(float(getattr(p, "size_usdt", 0) or 0)) for p in RT.ema_positions.values()
-                )
+                ema_exp = sum(abs(float(getattr(p, "size_usdt", 0) or 0)) for p in RT.ema_positions.values())
                 RT.risk.set_open_notional(ema_exp)
-            for pr in pairs:
-                if RT._shutdown:
-                    break
-                sym = pr["symbol"]
-                await asyncio.sleep(0.15)
-                try:
-                    pair_exit_cfg = {**ex_cfg, **(pr.get("exit") or {})}
-                    pair_tp_pct = float(pair_exit_cfg.get("take_profit_pct", 1.5))
-                    pair_sl_pct = float(pair_exit_cfg.get("stop_loss_pct", 0.5))
-                    pair_use_atr_targets = bool(pair_exit_cfg.get("use_atr_targets", True))
-                    pair_tp_atr_mult = float(pair_exit_cfg.get("tp_atr_mult", 1.8))
-                    pair_sl_atr_mult = float(pair_exit_cfg.get("sl_atr_mult", 1.0))
-                    pair_max_hold = int(pair_exit_cfg.get("max_hold_candles", 12))
-                    try:
-                        raw = await asyncio.wait_for(
-                            asyncio.to_thread(ex.fetch_ohlcv, sym, tf, None, 80),
-                            timeout=75.0,
-                        )
-                    except asyncio.TimeoutError:
-                        logger.warning("EMA %s: fetch_ohlcv timeout — пропуск бара", sym)
-                        continue
-                    if not raw or len(raw) < 2:
-                        continue
-                    closed = raw[:-1]
-                    candles = [
-                        {
-                            "ts": int(x[0]),
-                            "open": float(x[1]),
-                            "high": float(x[2]),
-                            "low": float(x[3]),
-                            "close": float(x[4]),
-                            "volume": float(x[5]),
-                        }
-                        for x in closed
-                    ]
-                    bar_ts = int(closed[-1][0])
-                    RT.ema_current_bar_ts[sym] = bar_ts
-                    ema_period = int(ent_cfg.get("ema_period", 9))
-                    ind = get_indicators(
-                        candles,
-                        {
-                            **ent_cfg,
-                            "ema_period": ema_period,
-                            "volume_lookback": ent_cfg.get("volume_lookback", 10),
-                        },
-                    )
-                    if not ind.get("warming_up"):
-                        higher_tf = str(ent_cfg.get("higher_tf", "15m"))
-                        ht_detail = await _ema_higher_tf_trend_cached(ex, sym, higher_tf, ttl_sec=60.0)
-                        if ht_detail:
-                            ind["higher_tf_trend"] = ht_detail["trend"]
-                            ind["higher_tf_trend_detail"] = ht_detail
-                            ind["higher_tf_volume_ratio"] = float(ht_detail.get("volume_ratio") or 0.0)
-                        else:
-                            ind["higher_tf_trend"] = None
-                            ind["higher_tf_trend_detail"] = None
-                            ind["higher_tf_volume_ratio"] = 0.0
-                    auto_profile = (
-                        _ema_auto_trade_profile(
-                            ind,
-                            dep,
-                            rk_es,
-                            pair_exit_cfg,
-                            {**auto_cfg, "min_score_to_trade": dyn_min_score},
-                            lev,
-                            pos_pct,
-                            dry_es,
-                        )
-                        if (auto_enabled and not ind.get("warming_up"))
-                        else None
-                    )
-                    if auto_profile:
-                        ind["auto_trade_score"] = auto_profile["score"]
-                        ind["auto_budget_factor"] = auto_profile["budget_factor"]
-                        ind["auto_position_pct"] = auto_profile["position_pct"]
-                        ind["auto_leverage"] = auto_profile["leverage"]
-                        ind["auto_allow_trade"] = auto_profile["allow_trade"]
-                        ind["auto_min_score_dynamic"] = dyn_min_score
-                    closes_all = [c["close"] for c in candles]
-                    ema_series = calc_ema(closes_all, ema_period) if len(closes_all) >= ema_period else []
-                    slice_c = candles[-50:] if len(candles) > 50 else candles
-                    off = len(candles) - len(slice_c)
-                    chart_rows: list[dict] = []
-                    for j, c in enumerate(slice_c):
-                        idx = off + j
-                        ema_v = ema_series[idx] if idx < len(ema_series) else (
-                            ema_series[-1] if ema_series else c["close"]
-                        )
-                        chart_rows.append(
-                            {
-                                "ts": c["ts"],
-                                "open": c["open"],
-                                "high": c["high"],
-                                "low": c["low"],
-                                "close": c["close"],
-                                "volume": c["volume"],
-                                "ema": float(ema_v),
-                            }
-                        )
-                    RT.ema_chart_history[sym] = chart_rows
-                    if not ind.get("warming_up") and eng:
-                        base_ind = {k: v for k, v in ind.items() if k != "warming_up"}
-                        prev_ui = eng.preview_panel_status(ind)
-                        RT.ema_indicators[sym] = {**base_ind, **prev_ui}
-                    elif ind.get("warming_up"):
-                        RT.ema_indicators[sym] = {}
-                    try:
-                        ticker = await asyncio.wait_for(
-                            asyncio.to_thread(ex.fetch_ticker, sym),
-                            timeout=35.0,
-                        )
-                    except asyncio.TimeoutError:
-                        logger.warning("EMA %s: fetch_ticker timeout — пропуск бара", sym)
-                        continue
-                    last = float(ticker["last"] or ticker["close"] or candles[-1]["close"])
-                    if sym in RT.ema_positions:
-                        pos = RT.ema_positions[sym]
-                        pos.update(last)
-                        if not ind.get("warming_up"):
-                            x = eng.check_exit(pos, ind, bar_ts)
-                            if x["should_exit"]:
-                                await RT._close_ema_scalp(
-                                    sym,
-                                    pos,
-                                    last,
-                                    str(x.get("reason", "EXIT")),
-                                    bar_ts_ms=bar_ts,
-                                )
-                        continue
-    
-                    if RT.ema_last_bar_ts.get(sym) == bar_ts:
-                        continue
-                    RT.ema_last_bar_ts[sym] = bar_ts
-                    if ind.get("warming_up"):
-                        continue
-                    if auto_profile and not auto_profile.get("allow_trade", False):
-                        continue
-                    if auto_profile and top_n > 0:
-                        score_map: list[float] = []
-                        for pp in pairs:
-                            ss = str(pp.get("symbol") or "")
-                            if not ss:
-                                continue
-                            if ss == sym:
-                                score_map.append(float(auto_profile.get("score") or 0.0))
-                                continue
-                            ind_prev = RT.ema_indicators.get(ss) or {}
-                            v = ind_prev.get("auto_trade_score")
-                            if v is None:
-                                continue
-                            score_map.append(float(v))
-                        if len(score_map) >= top_n:
-                            score_map.sort(reverse=True)
-                            cutoff = score_map[top_n - 1]
-                            if float(auto_profile.get("score") or 0.0) < cutoff:
-                                continue
-                    notional = (
-                        float(auto_profile["margin_usdt"])
-                        if auto_profile
-                        else dep * pos_pct
-                    )
-                    trade_lev = int(auto_profile["leverage"]) if auto_profile else lev
-                    trade_tp_pct = float(auto_profile["tp_pct"]) if auto_profile else pair_tp_pct
-                    trade_sl_pct = float(auto_profile["sl_pct"]) if auto_profile else pair_sl_pct
-                    trade_use_atr_targets = (
-                        bool(auto_profile.get("use_atr_targets", pair_use_atr_targets))
-                        if auto_profile
-                        else pair_use_atr_targets
-                    )
-                    trade_tp_atr_mult = (
-                        float(auto_profile.get("tp_atr_mult", pair_tp_atr_mult))
-                        if auto_profile
-                        else pair_tp_atr_mult
-                    )
-                    trade_sl_atr_mult = (
-                        float(auto_profile.get("sl_atr_mult", pair_sl_atr_mult))
-                        if auto_profile
-                        else pair_sl_atr_mult
-                    )
-                    ok, _ = RT.risk.check_can_open(f"ema:{sym}", notional, legs=1) if RT.risk else (True, "")
-                    logger.debug(
-                        "[EMA DEBUG] %s | close=%.2f ema=%.2f | above=%s below=%s | "
-                        "vol_ratio=%.2f is_green=%s is_red=%s",
-                        sym,
-                        float(ind.get("close") or 0.0),
-                        float(ind.get("ema_current") or 0.0),
-                        ind.get("above_ema_count"),
-                        ind.get("below_ema_count"),
-                        float(ind.get("volume_ratio") or 0.0),
-                        ind.get("is_green"),
-                        ind.get("is_red"),
-                    )
-                    entry_sig = eng.check_entry(
-                        ind,
-                        sym,
-                        len(RT.ema_positions),
-                        RT.ema_last_entry_ts.get(sym),
-                        bar_ts,
-                        ok,
-                    )
-                    if entry_sig["action"] not in ("OPEN_LONG", "OPEN_SHORT"):
-                        continue
-                    side_buy = entry_sig["action"] == "OPEN_LONG"
-                    order_usdt = notional * trade_lev
-                    res = await om.open_scalp_market(
-                        sym, "buy" if side_buy else "sell", order_usdt, dry_run_override=dry_es
-                    )
-                    if res.get("error"):
-                        continue
-                    entry = float(res.get("price") or last)
-                    qty = float(res.get("amount") or (notional * trade_lev / max(entry, 1e-12)))
-                    side = "LONG" if side_buy else "SHORT"
-                    atr = float(ind.get("atr") or 0.0)
-                    if trade_use_atr_targets and atr > 0:
-                        tp_abs = atr * trade_tp_atr_mult
-                        sl_abs = atr * trade_sl_atr_mult
-                        if side == "LONG":
-                            tp_p = entry + tp_abs
-                            sl_p = entry - sl_abs
-                        else:
-                            tp_p = entry - tp_abs
-                            sl_p = entry + sl_abs
-                    else:
-                        if side == "LONG":
-                            tp_p = entry * (1.0 + trade_tp_pct / 100.0)
-                            sl_p = entry * (1.0 - trade_sl_pct / 100.0)
-                        else:
-                            tp_p = entry * (1.0 - trade_tp_pct / 100.0)
-                            sl_p = entry * (1.0 + trade_sl_pct / 100.0)
-                    ts_open_iso = datetime.fromtimestamp(bar_ts / 1000.0, tz=timezone.utc).isoformat()
-                    entry_reason = str(entry_sig.get("reason") or "")
-                    RT.ema_positions[sym] = EMAScalpPosition(
-                        symbol=sym,
-                        side=side,
-                        entry_price=entry,
-                        size_usdt=notional,
-                        qty=qty,
-                        leverage=trade_lev,
-                        tp_price=tp_p,
-                        sl_price=sl_p,
-                        max_hold_candles=pair_max_hold,
-                        entry_ts_ms=bar_ts,
-                        tf_ms=tf_ms,
-                        ema_at_entry=float(ind.get("ema_current") or 0.0),
-                        volume_ratio_at_entry=float(ind.get("volume_ratio") or 0.0),
-                        above_ema_count_at_entry=int(ind.get("above_ema_count") or 0),
-                        entry_reason=entry_reason,
-                        timestamp_open_iso=ts_open_iso,
-                    )
-                    RT.ema_last_entry_ts[sym] = bar_ts
-                    if dry_es and RT.conn:
-                        dbmod.upsert_ema_sim_open(RT.conn, asdict(RT.ema_positions[sym]))
-                    _aec = int(ind.get("above_ema_count") or 0)
-                    _bec = int(ind.get("below_ema_count") or 0)
-                    _vr = float(ind.get("volume_ratio") or 0.0)
-                    _adx = float(ind.get("adx") or 0.0)
-                    _dvwap = float(ind.get("distance_from_vwap_pct") or 0.0)
-                    _atr = float(ind.get("atr") or 0.0)
-                    _ascore = float(ind.get("auto_trade_score") or 0.0)
-                    _ht = ind.get("higher_tf_trend_detail")
-                    _trend = (_ht or {}).get("trend", "—")
-                    _e9 = float((_ht or {}).get("ema9") or 0.0)
+            for prof in profiles:
+                profile_id = str(prof.get("id") or "base")
+                tf = str(prof.get("timeframe") or "5m")
+                tf_ms = int(float(ex.parse_timeframe(tf)) * 1000)
+                ent_cfg = prof.get("entry") or {}
+                rk_es = prof.get("risk") or {}
+                auto_cfg = prof.get("auto") or {}
+                ex_cfg = prof.get("exit") or {}
+                pairs = [p for p in (prof.get("pairs") or []) if p.get("enabled")]
+                auto_enabled = bool(auto_cfg.get("enabled", False))
+                dry_es = bool(prof.get("dry_run", (cfg.get("bot") or {}).get("dry_run", True)))
+                lev = int(rk_es.get("leverage", 5))
+                pos_pct = float(rk_es.get("position_size_pct", 25)) / 100.0
+                dep = effective_ema_deposit_usdt(ex_map, rk_es)
+                use_ex_balance = bool(rk_es.get("use_exchange_balance", False))
+                cfg_dep = float(rk_es.get("balance_usdt", 50) or 50)
+                dep_snapshot = (round(dep, 4), use_ex_balance, round(cfg_dep, 4))
+                if last_dep_snapshot.get(profile_id) != dep_snapshot:
+                    src = "exchange_balance" if use_ex_balance else "config_balance_usdt"
                     logger.info(
-                        "EMA_TRADE ENTRY %s %s entry=%.6f entry_reason=%s margin=%.4f lev=%d "
-                        "tp=%.6f sl=%.6f above_ema=%d below_ema=%d vol_ratio=%.4f adx=%.2f "
-                        "dvwap=%.3f atr=%.6f auto_score=%.2f 15m_trend=%s 15m_ema9=%.2f",
-                        sym,
-                        side,
-                        entry,
-                        entry_reason,
-                        notional,
-                        trade_lev,
-                        tp_p,
-                        sl_p,
-                        _aec,
-                        _bec,
-                        _vr,
-                        _adx,
-                        _dvwap,
-                        _atr,
-                        _ascore,
-                        _trend,
-                        _e9,
+                        "EMA_DEPOSIT[%s] effective=%.4f source=%s config_balance=%.4f use_exchange_balance=%s",
+                        profile_id, dep, src, cfg_dep, use_ex_balance,
                     )
-                except Exception as e:
-                    logger.exception("ema_scalper %s: %s", sym, e)
+                    last_dep_snapshot[profile_id] = dep_snapshot
+                eng = EMAScalpSignalEngine(
+                    {"ema_scalper": {"entry": ent_cfg, "exit": ex_cfg, "risk": rk_es, "timeframe": tf}}
+                )
+                base_min_score = float(auto_cfg.get("min_score_to_trade", 62.0))
+                dyn_min_score = (
+                    _ema_auto_dynamic_min_score(RT.conn, auto_cfg, base_min_score)
+                    if (auto_enabled and profile_id == "base")
+                    else base_min_score
+                )
+                top_n = int(auto_cfg.get("top_n_candidates", 0)) if auto_enabled else 0
+                for pr in pairs:
+                    if RT._shutdown:
+                        break
+                    sym = pr["symbol"]
+                    pos_key = ema_pos_key(profile_id, sym)
+                    await asyncio.sleep(0.12)
+                    try:
+                        pair_exit_cfg = {**ex_cfg, **(pr.get("exit") or {})}
+                        pair_tp_pct = float(pair_exit_cfg.get("take_profit_pct", 1.5))
+                        pair_sl_pct = float(pair_exit_cfg.get("stop_loss_pct", 0.5))
+                        pair_use_atr_targets = bool(pair_exit_cfg.get("use_atr_targets", True))
+                        pair_tp_atr_mult = float(pair_exit_cfg.get("tp_atr_mult", 1.8))
+                        pair_sl_atr_mult = float(pair_exit_cfg.get("sl_atr_mult", 1.0))
+                        pair_max_hold = int(pair_exit_cfg.get("max_hold_candles", 12))
+                        raw = await asyncio.wait_for(asyncio.to_thread(ex.fetch_ohlcv, sym, tf, None, 80), timeout=75.0)
+                        if not raw or len(raw) < 2:
+                            continue
+                        closed = raw[:-1]
+                        candles = [{"ts": int(x[0]), "open": float(x[1]), "high": float(x[2]), "low": float(x[3]), "close": float(x[4]), "volume": float(x[5])} for x in closed]
+                        bar_ts = int(closed[-1][0])
+                        RT.ema_current_bar_ts[pos_key] = bar_ts
+                        ema_period = int(ent_cfg.get("ema_period", 9))
+                        ind = get_indicators(candles, {**ent_cfg, "ema_period": ema_period, "volume_lookback": ent_cfg.get("volume_lookback", 10)})
+                        if not ind.get("warming_up"):
+                            ht_detail = await _ema_higher_tf_trend_cached(ex, sym, str(ent_cfg.get("higher_tf", "15m")), ttl_sec=60.0)
+                            ind["higher_tf_trend"] = (ht_detail or {}).get("trend")
+                            ind["higher_tf_trend_detail"] = ht_detail
+                            ind["higher_tf_volume_ratio"] = float((ht_detail or {}).get("volume_ratio") or 0.0)
+                        auto_profile = (
+                            _ema_auto_trade_profile(ind, dep, rk_es, pair_exit_cfg, {**auto_cfg, "min_score_to_trade": dyn_min_score}, lev, pos_pct, dry_es)
+                            if (auto_enabled and not ind.get("warming_up"))
+                            else None
+                        )
+                        if auto_profile:
+                            ind["auto_trade_score"] = auto_profile["score"]
+                            ind["auto_allow_trade"] = auto_profile["allow_trade"]
+                        closes_all = [c["close"] for c in candles]
+                        ema_series = calc_ema(closes_all, ema_period) if len(closes_all) >= ema_period else []
+                        slice_c = candles[-50:] if len(candles) > 50 else candles
+                        off = len(candles) - len(slice_c)
+                        RT.ema_chart_history[pos_key] = [{"ts": c["ts"], "open": c["open"], "high": c["high"], "low": c["low"], "close": c["close"], "volume": c["volume"], "ema": float(ema_series[off + j] if off + j < len(ema_series) else (ema_series[-1] if ema_series else c["close"]))} for j, c in enumerate(slice_c)]
+                        RT.ema_indicators[pos_key] = ({**{k: v for k, v in ind.items() if k != "warming_up"}, **eng.preview_panel_status(ind)} if not ind.get("warming_up") else {})
+                        ticker = await asyncio.wait_for(asyncio.to_thread(ex.fetch_ticker, sym), timeout=35.0)
+                        last = float(ticker["last"] or ticker["close"] or candles[-1]["close"])
+                        if pos_key in RT.ema_positions:
+                            pos = RT.ema_positions[pos_key]
+                            pos.update(last)
+                            if not ind.get("warming_up"):
+                                x = eng.check_exit(pos, ind, bar_ts)
+                                if x["should_exit"]:
+                                    await RT._close_ema_scalp(sym, pos, last, str(x.get("reason", "EXIT")), bar_ts_ms=bar_ts)
+                            continue
+                        if RT.ema_last_bar_ts.get(pos_key) == bar_ts:
+                            continue
+                        RT.ema_last_bar_ts[pos_key] = bar_ts
+                        if ind.get("warming_up"):
+                            continue
+                        if auto_profile and not auto_profile.get("allow_trade", False):
+                            continue
+                        if auto_profile and top_n > 0:
+                            score_map = [float(auto_profile.get("score") or 0.0)]
+                            for pp in pairs:
+                                ss = str(pp.get("symbol") or "")
+                                if not ss or ss == sym:
+                                    continue
+                                v = (RT.ema_indicators.get(ema_pos_key(profile_id, ss)) or {}).get("auto_trade_score")
+                                if v is not None:
+                                    score_map.append(float(v))
+                            if len(score_map) >= top_n:
+                                score_map.sort(reverse=True)
+                                if float(auto_profile.get("score") or 0.0) < score_map[top_n - 1]:
+                                    continue
+                        notional = float(auto_profile["margin_usdt"]) if auto_profile else dep * pos_pct
+                        trade_lev = int(auto_profile["leverage"]) if auto_profile else lev
+                        trade_tp_pct = float(auto_profile["tp_pct"]) if auto_profile else pair_tp_pct
+                        trade_sl_pct = float(auto_profile["sl_pct"]) if auto_profile else pair_sl_pct
+                        trade_use_atr_targets = bool(auto_profile.get("use_atr_targets", pair_use_atr_targets)) if auto_profile else pair_use_atr_targets
+                        trade_tp_atr_mult = float(auto_profile.get("tp_atr_mult", pair_tp_atr_mult)) if auto_profile else pair_tp_atr_mult
+                        trade_sl_atr_mult = float(auto_profile.get("sl_atr_mult", pair_sl_atr_mult)) if auto_profile else pair_sl_atr_mult
+                        ok, _ = RT.risk.check_can_open(f"ema:{profile_id}:{sym}", notional, legs=1) if RT.risk else (True, "")
+                        entry_sig = eng.check_entry(ind, sym, len([k for k in RT.ema_positions.keys() if k.startswith(f"{profile_id}|")]), RT.ema_last_entry_ts.get(pos_key), bar_ts, ok)
+                        if entry_sig["action"] not in ("OPEN_LONG", "OPEN_SHORT"):
+                            continue
+                        side_buy = entry_sig["action"] == "OPEN_LONG"
+                        res = await om.open_scalp_market(sym, "buy" if side_buy else "sell", notional * trade_lev, dry_run_override=dry_es)
+                        if res.get("error"):
+                            continue
+                        entry = float(res.get("price") or last)
+                        qty = float(res.get("amount") or (notional * trade_lev / max(entry, 1e-12)))
+                        side = "LONG" if side_buy else "SHORT"
+                        atr = float(ind.get("atr") or 0.0)
+                        if trade_use_atr_targets and atr > 0:
+                            tp_abs = atr * trade_tp_atr_mult
+                            sl_abs = atr * trade_sl_atr_mult
+                            tp_p = entry + tp_abs if side == "LONG" else entry - tp_abs
+                            sl_p = entry - sl_abs if side == "LONG" else entry + sl_abs
+                        else:
+                            tp_p = entry * (1.0 + trade_tp_pct / 100.0) if side == "LONG" else entry * (1.0 - trade_tp_pct / 100.0)
+                            sl_p = entry * (1.0 - trade_sl_pct / 100.0) if side == "LONG" else entry * (1.0 + trade_sl_pct / 100.0)
+                        RT.ema_positions[pos_key] = EMAScalpPosition(
+                            profile_id=profile_id, symbol=sym, side=side, entry_price=entry, size_usdt=notional, qty=qty,
+                            leverage=trade_lev, tp_price=tp_p, sl_price=sl_p, max_hold_candles=pair_max_hold,
+                            entry_ts_ms=bar_ts, tf_ms=tf_ms, ema_at_entry=float(ind.get("ema_current") or 0.0),
+                            volume_ratio_at_entry=float(ind.get("volume_ratio") or 0.0),
+                            above_ema_count_at_entry=int(ind.get("above_ema_count") or 0),
+                            entry_reason=str(entry_sig.get("reason") or ""),
+                            timestamp_open_iso=datetime.fromtimestamp(bar_ts / 1000.0, tz=timezone.utc).isoformat(),
+                        )
+                        RT.ema_last_entry_ts[pos_key] = bar_ts
+                        if dry_es and RT.conn:
+                            dbmod.upsert_ema_sim_open(RT.conn, asdict(RT.ema_positions[pos_key]))
+                        logger.info("EMA_TRADE ENTRY [%s] %s %s entry=%.6f margin=%.4f lev=%d", profile_id, sym, side, entry, notional, trade_lev)
+                    except Exception as e:
+                        logger.exception("ema_scalper[%s] %s: %s", profile_id, sym, e)
             await safe_broadcast()
             await asyncio.sleep(loop_sec)
         except asyncio.CancelledError:
@@ -1947,7 +1879,8 @@ async def sync_positions_on_startup() -> None:
             continue
         processed_syms.add(sym)
 
-        if sym in ema_syms and sym not in RT.ema_positions:
+        base_key = ema_pos_key("base", sym)
+        if sym in ema_syms and base_key not in RT.ema_positions:
             es = ema_cfg
             rk = es.get("risk") or {}
             ex_cfg = es.get("exit") or {}
@@ -1971,7 +1904,8 @@ async def sync_positions_on_startup() -> None:
             tf_ms = int(float(ex_obj.parse_timeframe(tf)) * 1000)
             ts_ms = int(time.time() * 1000)
             ts_iso = datetime.now(timezone.utc).isoformat()
-            RT.ema_positions[sym] = EMAScalpPosition(
+            RT.ema_positions[base_key] = EMAScalpPosition(
+                profile_id="base",
                 symbol=sym,
                 side=side,
                 entry_price=entry,
@@ -2048,14 +1982,18 @@ def restore_ema_dry_positions_from_db() -> None:
         return
     for row in dbmod.load_all_ema_sim_open(RT.conn):
         sym = row["symbol"]
-        if sym in RT.ema_positions:
+        profile_id = str(row.get("profile_id") or "base")
+        key = ema_pos_key(profile_id, sym)
+        if key in RT.ema_positions:
             continue
         try:
             data = json.loads(row["payload_json"])
-            RT.ema_positions[sym] = EMAScalpPosition(**data)
-            RT.ema_last_entry_ts[sym] = int(data.get("entry_ts_ms") or 0)
+            data["profile_id"] = str(data.get("profile_id") or profile_id)
+            RT.ema_positions[key] = EMAScalpPosition(**data)
+            RT.ema_last_entry_ts[key] = int(data.get("entry_ts_ms") or 0)
             logger.info(
-                "Восстановлена EMA dry-run из БД: %s %s entry=%.4f",
+                "Восстановлена EMA dry-run из БД: [%s] %s %s entry=%.4f",
+                profile_id,
                 sym,
                 data.get("side"),
                 float(data.get("entry_price") or 0.0),

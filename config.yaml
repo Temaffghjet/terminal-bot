@@ -55,6 +55,76 @@ ema_scalper:
         tp_atr_mult: 1.7
         sl_atr_mult: 0.95
   timeframe: 5m
+  profiles:
+    - id: "cfg_a"
+      label: "Config A Trend"
+      dry_run: true
+      pairs:
+        - symbol: "ETH/USDC:USDC"
+          enabled: true
+        - symbol: "BTC/USDC:USDC"
+          enabled: true
+        - symbol: "SOL/USDC:USDC"
+          enabled: true
+      risk:
+        use_exchange_balance: false
+        balance_usdt: 500
+        leverage: 8
+        position_size_pct: 35
+        max_open_positions: 2
+      auto:
+        enabled: true
+        min_score_to_trade: 60
+        min_position_pct: 22
+        max_position_pct: 45
+        min_leverage: 5
+        max_leverage: 9
+    - id: "cfg_b"
+      label: "Config B Balanced"
+      dry_run: true
+      pairs:
+        - symbol: "ETH/USDC:USDC"
+          enabled: true
+        - symbol: "BTC/USDC:USDC"
+          enabled: true
+        - symbol: "SOL/USDC:USDC"
+          enabled: true
+      risk:
+        use_exchange_balance: false
+        balance_usdt: 500
+        leverage: 10
+        position_size_pct: 40
+        max_open_positions: 3
+      auto:
+        enabled: true
+        min_score_to_trade: 58
+        min_position_pct: 25
+        max_position_pct: 55
+        min_leverage: 6
+        max_leverage: 10
+    - id: "cfg_c"
+      label: "Config C Aggressive"
+      dry_run: true
+      pairs:
+        - symbol: "ETH/USDC:USDC"
+          enabled: true
+        - symbol: "BTC/USDC:USDC"
+          enabled: true
+        - symbol: "SOL/USDC:USDC"
+          enabled: true
+      risk:
+        use_exchange_balance: false
+        balance_usdt: 500
+        leverage: 12
+        position_size_pct: 45
+        max_open_positions: 3
+      auto:
+        enabled: true
+        min_score_to_trade: 56
+        min_position_pct: 30
+        max_position_pct: 60
+        min_leverage: 7
+        max_leverage: 12
   entry:
     ema_period: 9
     volume_lookback: 10

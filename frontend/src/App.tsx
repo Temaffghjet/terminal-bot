@@ -8,9 +8,6 @@ import SignalIndicator, { type ScalpIndicatorSnapshot } from "./components/Signa
 import ModeBanner from "./components/ModeBanner";
 import SpreadChart from "./components/SpreadChart";
 import TradeLog from "./components/TradeLog";
-import BreakoutPositions from "./components/breakout/BreakoutPositions";
-import BreakoutSignalMonitor from "./components/breakout/BreakoutSignalMonitor";
-import BreakoutStats from "./components/breakout/BreakoutStats";
 import EMAStatusBar from "./components/ema_scalper/EMAStatusBar";
 import EMAPositionCard from "./components/ema_scalper/EMAPositionCard";
 import EMAStatsPanel from "./components/ema_scalper/EMAStatsPanel";
@@ -69,16 +66,6 @@ export default function App() {
   const wins = closed.filter((t) => (t.pnl_usdt ?? 0) > 0).length;
   const winRate = closed.length ? (wins / closed.length) * 100 : 0;
 
-  const breakoutState = state?.breakout as
-    | {
-        positions?: React.ComponentProps<typeof BreakoutPositions>["positions"];
-        last_signals?: Record<string, { signal?: string; volume_ratio?: number; breakout_level?: number }>;
-        stats_today?: React.ComponentProps<typeof BreakoutStats>["statsToday"];
-        stats?: Record<string, unknown>;
-        equity_history?: number[];
-      }
-    | undefined;
-
   const emaState = state?.ema_scalper as
     | {
         positions?: React.ComponentProps<typeof EMAPositionCard>["positions"];
@@ -91,6 +78,20 @@ export default function App() {
         max_open_positions?: number;
         auto_tuner?: Record<string, unknown>;
         auto_tuner_history?: Record<string, unknown>[];
+        profiles?: Record<
+          string,
+          {
+            id?: string;
+            label?: string;
+            positions?: React.ComponentProps<typeof EMAPositionCard>["positions"];
+            indicators?: Record<string, Record<string, unknown>>;
+            stats?: Record<string, unknown>;
+            candle_history?: Record<string, { ts: number; close: number; ema: number }[]>;
+            recent_trades?: Record<string, unknown>[];
+            enabled_symbols?: string[];
+            max_open_positions?: number;
+          }
+        >;
       }
     | undefined;
 
@@ -111,13 +112,7 @@ export default function App() {
     [emaState?.enabled_symbols],
   );
 
-  const breakoutOpenSyms = useMemo(() => {
-    const s = new Set<string>();
-    for (const p of breakoutState?.positions ?? []) {
-      if (p.status === "OPEN") s.add(p.symbol);
-    }
-    return s;
-  }, [breakoutState?.positions]);
+  const emaUi = state?.ema_scalper != null;
 
   const emaPolicy = useMemo(() => {
     const c = tradingCapital?.config;
@@ -209,7 +204,7 @@ export default function App() {
             totalRealized={todayPnl}
             onClosePair={(pairId) => sendMessage({ action: "close_pair", pair_id: pairId })}
           />
-          {strategyMode === "scalping" && (
+          {strategyMode === "scalping" && !emaUi && (
             <div className="p-2 border-t border-gray-800 grid grid-cols-1 sm:grid-cols-2 gap-2 overflow-auto max-h-[280px]">
               <ScalpingStats today={sm?.todayStats ?? {}} />
               <RiskMonitor dailyProgress={sm?.dailyProgress} riskMonitor={sm?.riskMonitor} />
@@ -227,29 +222,6 @@ export default function App() {
           />
         </div>
       </div>
-
-      {state?.breakout != null &&
-      ((breakoutState?.last_signals && Object.keys(breakoutState.last_signals).length > 0) ||
-        (breakoutState?.positions && breakoutState.positions.length > 0)) ? (
-        <div className="border-t border-gray-800 p-3 space-y-3 bg-black/20">
-          <h2 className="text-amber-500/90 text-xs uppercase tracking-wider">Breakout (1H)</h2>
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
-            <BreakoutSignalMonitor
-              lastSignals={breakoutState?.last_signals ?? {}}
-              openSymbols={breakoutOpenSyms}
-            />
-            <BreakoutPositions
-              positions={breakoutState?.positions ?? []}
-              sendMessage={sendMessage}
-            />
-            <BreakoutStats
-              statsToday={breakoutState?.stats_today ?? {}}
-              stats={(breakoutState?.stats ?? {}) as React.ComponentProps<typeof BreakoutStats>["stats"]}
-              equityHistory={breakoutState?.equity_history ?? []}
-            />
-          </div>
-        </div>
-      ) : null}
 
       {state?.ema_scalper != null ? (
         <div className="border-t border-gray-800 p-3 space-y-3 bg-black/20">
@@ -292,12 +264,40 @@ export default function App() {
               </div>
               <EMAStatsPanel stats={(emaState?.stats ?? {}) as React.ComponentProps<typeof EMAStatsPanel>["stats"]} />
               <EMATradeLog trades={emaState?.recent_trades ?? []} />
+              {emaState?.profiles && Object.keys(emaState.profiles).length > 1 ? (
+                <div className="space-y-4 pt-2 border-t border-gray-800">
+                  {Object.entries(emaState.profiles).map(([pid, prof]) => (
+                    <div key={pid} className="border border-gray-800 rounded p-3 bg-[#0b0b12] space-y-3">
+                      <div className="text-[11px] uppercase tracking-wider text-emerald-300">
+                        Профиль: {String(prof.label ?? pid)}
+                      </div>
+                      <EMAStatusBar
+                        indicators={(prof.indicators ?? {}) as Record<string, Record<string, unknown>>}
+                        watchlist={prof.enabled_symbols ?? []}
+                        depositMeta={{
+                          useExchangeBalance: Boolean(tradingCapital?.config?.ema_use_exchange_balance),
+                          balanceUsdt: 500,
+                        }}
+                      />
+                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                        <EMAPositionCard positions={prof.positions ?? []} sendMessage={sendMessage} />
+                        <EMAStatsPanel
+                          stats={(prof.stats ?? {}) as React.ComponentProps<typeof EMAStatsPanel>["stats"]}
+                        />
+                      </div>
+                      <EMATradeLog trades={prof.recent_trades ?? []} />
+                    </div>
+                  ))}
+                </div>
+              ) : null}
             </>
           )}
         </div>
       ) : null}
 
-      <TradeLog trades={trades} scalpLeverage={flags.risk_leverage ?? 5} emaPolicy={emaPolicy} />
+      {!emaUi ? (
+        <TradeLog trades={trades} scalpLeverage={flags.risk_leverage ?? 5} emaPolicy={emaPolicy} />
+      ) : null}
     </div>
   );
 }

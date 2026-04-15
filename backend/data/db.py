@@ -84,9 +84,11 @@ CREATE INDEX IF NOT EXISTS idx_scalp_symbol ON scalp_trades(symbol);
 CREATE INDEX IF NOT EXISTS idx_scalp_ts ON scalp_trades(timestamp_open);
 CREATE INDEX IF NOT EXISTS idx_scalp_strategy ON scalp_trades(strategy);
 -- открытые позиции EMA в dry-run (память процесса → переживают restart)
-CREATE TABLE IF NOT EXISTS ema_sim_open (
-    symbol TEXT PRIMARY KEY NOT NULL,
+CREATE TABLE IF NOT EXISTS ema_sim_open_v2 (
+    profile_id TEXT NOT NULL DEFAULT 'base',
+    symbol TEXT NOT NULL,
     payload_json TEXT NOT NULL
+    ,PRIMARY KEY (profile_id, symbol)
 );
 """
     )
@@ -108,26 +110,33 @@ def upsert_ema_sim_open(conn: sqlite3.Connection, payload: dict[str, Any]) -> No
     import json
 
     sym = str(payload.get("symbol") or "")
+    profile_id = str(payload.get("profile_id") or "base")
     if not sym:
         return
     conn.execute(
         """
-        INSERT INTO ema_sim_open (symbol, payload_json) VALUES (?, ?)
-        ON CONFLICT(symbol) DO UPDATE SET payload_json = excluded.payload_json
+        INSERT INTO ema_sim_open_v2 (profile_id, symbol, payload_json) VALUES (?, ?, ?)
+        ON CONFLICT(profile_id, symbol) DO UPDATE SET payload_json = excluded.payload_json
         """,
-        (sym, json.dumps(payload, default=str)),
+        (profile_id, sym, json.dumps(payload, default=str)),
     )
     conn.commit()
 
 
-def delete_ema_sim_open(conn: sqlite3.Connection, symbol: str) -> None:
-    conn.execute("DELETE FROM ema_sim_open WHERE symbol = ?", (symbol,))
+def delete_ema_sim_open(conn: sqlite3.Connection, symbol: str, profile_id: str = "base") -> None:
+    conn.execute(
+        "DELETE FROM ema_sim_open_v2 WHERE symbol = ? AND profile_id = ?",
+        (symbol, profile_id),
+    )
     conn.commit()
 
 
 def load_all_ema_sim_open(conn: sqlite3.Connection) -> list[dict[str, Any]]:
-    cur = conn.execute("SELECT symbol, payload_json FROM ema_sim_open")
-    return [{"symbol": str(r[0]), "payload_json": str(r[1])} for r in cur.fetchall()]
+    cur = conn.execute("SELECT profile_id, symbol, payload_json FROM ema_sim_open_v2")
+    return [
+        {"profile_id": str(r[0]), "symbol": str(r[1]), "payload_json": str(r[2])}
+        for r in cur.fetchall()
+    ]
 
 
 def insert_trade(conn: sqlite3.Connection, row: dict[str, Any]) -> int:

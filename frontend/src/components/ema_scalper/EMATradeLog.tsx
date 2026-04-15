@@ -86,7 +86,7 @@ export default function EMATradeLog({ trades }: { trades: Row[] }) {
     URL.revokeObjectURL(url);
   };
   return (
-    <div className="flex flex-col max-h-[220px] border border-gray-800 rounded">
+    <div className="flex flex-col max-h-[420px] border border-gray-800 rounded">
       <div className="px-2 py-1 border-b border-gray-800 bg-terminal-bg text-[10px] flex flex-wrap items-center gap-2">
         <span className="text-gray-500">Дата:</span>
         <select
