@@ -1,5 +1,6 @@
 # Hyperliquid + EMA Scalper 5m. Секреты: HYPERLIQUID_* в .env
 # Stat-arb / breakout / старый scalping 1m в коде выключены — см. strategy.mode + флаги enabled.
+# Пресет как 2026-04-14 (2f11d25), симуляция: balance_usdt 500, без баланса с биржи.
 
 exchange:
   name: hyperliquid
@@ -33,98 +34,15 @@ ema_scalper:
   enabled: true
   exchange: hyperliquid
   testnet: false
-  # Симуляция: ордера не уходят на биржу; депозит для расчёта маржи — см. risk.balance_usdt
   dry_run: true
   pairs:
     - symbol: "ETH/USDC:USDC"
       enabled: true
-      exit:
-        max_hold_candles: 7
-        tp_atr_mult: 1.9
-        sl_atr_mult: 1.0
     - symbol: "BTC/USDC:USDC"
       enabled: true
-      exit:
-        max_hold_candles: 9
-        tp_atr_mult: 2.0
-        sl_atr_mult: 1.05
     - symbol: "SOL/USDC:USDC"
       enabled: true
-      exit:
-        max_hold_candles: 6
-        tp_atr_mult: 1.7
-        sl_atr_mult: 0.95
   timeframe: 5m
-  profiles:
-    - id: "cfg_a"
-      label: "Config A Trend"
-      dry_run: true
-      pairs:
-        - symbol: "ETH/USDC:USDC"
-          enabled: true
-        - symbol: "BTC/USDC:USDC"
-          enabled: true
-        - symbol: "SOL/USDC:USDC"
-          enabled: true
-      risk:
-        use_exchange_balance: false
-        balance_usdt: 500
-        leverage: 8
-        position_size_pct: 35
-        max_open_positions: 2
-      auto:
-        enabled: true
-        min_score_to_trade: 60
-        min_position_pct: 22
-        max_position_pct: 45
-        min_leverage: 5
-        max_leverage: 9
-    - id: "cfg_b"
-      label: "Config B Balanced"
-      dry_run: true
-      pairs:
-        - symbol: "ETH/USDC:USDC"
-          enabled: true
-        - symbol: "BTC/USDC:USDC"
-          enabled: true
-        - symbol: "SOL/USDC:USDC"
-          enabled: true
-      risk:
-        use_exchange_balance: false
-        balance_usdt: 500
-        leverage: 10
-        position_size_pct: 40
-        max_open_positions: 3
-      auto:
-        enabled: true
-        min_score_to_trade: 58
-        min_position_pct: 25
-        max_position_pct: 55
-        min_leverage: 6
-        max_leverage: 10
-    - id: "cfg_c"
-      label: "Config C Aggressive"
-      dry_run: true
-      pairs:
-        - symbol: "ETH/USDC:USDC"
-          enabled: true
-        - symbol: "BTC/USDC:USDC"
-          enabled: true
-        - symbol: "SOL/USDC:USDC"
-          enabled: true
-      risk:
-        use_exchange_balance: false
-        balance_usdt: 500
-        leverage: 12
-        position_size_pct: 45
-        max_open_positions: 3
-      auto:
-        enabled: true
-        min_score_to_trade: 56
-        min_position_pct: 30
-        max_position_pct: 60
-        min_leverage: 7
-        max_leverage: 12
   entry:
     ema_period: 9
     volume_lookback: 10
@@ -141,18 +59,8 @@ ema_scalper:
     adx_filter_enabled: true
     adx_period: 14
     adx_threshold: 20
-    anti_flat_enabled: true
-    anti_flat_min_atr_pct: 0.15
     vwap_lookback: 20
     vwap_max_distance_pct: 0.9
-    volume_percentile_lookback: 40
-    min_volume_percentile: 60
-    higher_tf_min_volume_ratio: 1.0
-    macd_filter_enabled: true
-    macd_fast_period: 12
-    macd_slow_period: 26
-    macd_signal_period: 9
-    macd_hist_rising_required: true
     cooldown_candles: 4
     higher_tf: "15m"
     atr_period: 14
@@ -168,27 +76,24 @@ ema_scalper:
     max_hold_candles: 6
     ema_cross_exit: false
   risk:
-    # Симуляция на $500: не тянуть маржу с кошелька HL — весь расчёт от balance_usdt
+    # Симуляция на $500 (как просили); расчёт маржи не от кошелька HL
     use_exchange_balance: false
     balance_usdt: 500
-    # Базовая доля маржи на сделку; автопилот может поднять до max_position_pct
-    position_size_pct: 40
-    max_open_positions: 3
-    # Базовое плечо; в dry_run автопилот крутит leverage в диапазоне min_leverage..max_leverage
-    leverage: 10
-    max_daily_loss_pct: 5.0
+    position_size_pct: 25
+    max_open_positions: 2
+    leverage: 5
+    max_daily_loss_pct: 3.0
     use_limit_orders: true
   auto:
     enabled: true
-    # Чуть мягче порог — больше сделок в симуляции для роста % (риск выше)
-    min_score_to_trade: 58
+    min_score_to_trade: 62
     top_n_candidates: 2
-    min_budget_factor: 0.65
+    min_budget_factor: 0.35
     max_budget_factor: 1.0
-    min_position_pct: 25
-    max_position_pct: 55
-    min_leverage: 6
-    max_leverage: 10
+    min_position_pct: 12
+    max_position_pct: 35
+    min_leverage: 3
+    max_leverage: 5
     # На real-трейде лучше держать false, пока не откалибруем модель
     allow_live_dynamic_leverage: false
     min_tp_pct: 0.5

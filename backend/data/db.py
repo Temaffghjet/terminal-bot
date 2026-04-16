@@ -1,6 +1,7 @@
 """SQLite: trades, metrics, logs"""
 from __future__ import annotations
 
+import re
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -297,6 +298,112 @@ def get_equity_history(
         ORDER BY id ASC
         """,
         (strategy,),
+    )
+    rows = [float(r[0]) for r in cur.fetchall()]
+    cum = float(deposit)
+    out: list[float] = []
+    for pnl in rows:
+        cum += pnl
+        out.append(round(cum, 4))
+    if limit and len(out) > limit:
+        out = out[-limit:]
+    return out
+
+
+def fetch_ema_base_strategy_stats(conn: sqlite3.Connection) -> dict[str, Any]:
+    """EMA base: объединяет legacy `ema_scalper` и `ema_scalper:base` (один и тот же режим в БД)."""
+    start = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    cur_all = conn.execute(
+        """
+        SELECT COUNT(*),
+               COALESCE(SUM(CASE WHEN pnl_usdt > 0 THEN 1 ELSE 0 END), 0),
+               COALESCE(SUM(CASE WHEN pnl_usdt < 0 THEN 1 ELSE 0 END), 0),
+               COALESCE(SUM(pnl_usdt), 0),
+               COALESCE(SUM(CASE WHEN pnl_usdt < 0 THEN ABS(pnl_usdt) ELSE 0 END), 0),
+               COALESCE(SUM(CASE WHEN pnl_usdt > 0 THEN pnl_usdt ELSE 0 END), 0)
+        FROM scalp_trades
+        WHERE strategy IN ('ema_scalper', 'ema_scalper:base')
+        """,
+    )
+    row = cur_all.fetchone()
+    n = int(row[0] or 0)
+    wins = int(row[1] or 0)
+    losses = int(row[2] or 0)
+    total_pnl = float(row[3] or 0)
+    gross_loss = float(row[4] or 0)
+    gross_win = float(row[5] or 0)
+    pf = (gross_win / gross_loss) if gross_loss > 1e-12 else 0.0
+
+    cur_td = conn.execute(
+        """
+        SELECT COUNT(*),
+               COALESCE(SUM(CASE WHEN pnl_usdt > 0 THEN 1 ELSE 0 END), 0),
+               COALESCE(SUM(CASE WHEN pnl_usdt < 0 THEN 1 ELSE 0 END), 0),
+               COALESCE(SUM(pnl_usdt), 0),
+               COALESCE(SUM(fee_usdt), 0),
+               COALESCE(AVG(candles_held), 0)
+        FROM scalp_trades
+        WHERE strategy IN ('ema_scalper', 'ema_scalper:base') AND timestamp_close >= ?
+        """,
+        (start,),
+    )
+    t = cur_td.fetchone()
+    return {
+        "all_trades": n,
+        "all_wins": wins,
+        "all_losses": losses,
+        "all_pnl": total_pnl,
+        "win_rate_all": (100.0 * wins / n) if n else 0.0,
+        "profit_factor": round(pf, 4) if pf else 0.0,
+        "today_trades": int(t[0] or 0),
+        "today_wins": int(t[1] or 0),
+        "today_losses": int(t[2] or 0),
+        "today_pnl": float(t[3] or 0),
+        "today_fees": float(t[4] or 0),
+        "avg_hold_candles": float(t[5] or 0),
+    }
+
+
+def list_ema_base_trades_for_utc_day(conn: sqlite3.Connection, day_ymd: str) -> list[dict[str, Any]]:
+    """Сделки EMA за календарный день UTC. day_ymd: YYYY-MM-DD."""
+    s = (day_ymd or "").strip()
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", s):
+        return []
+    cur = conn.execute(
+        """
+        SELECT * FROM scalp_trades
+        WHERE strategy IN ('ema_scalper', 'ema_scalper:base')
+          AND timestamp_close IS NOT NULL AND TRIM(timestamp_close) != ''
+          AND date(timestamp_close) = ?
+        ORDER BY id DESC
+        LIMIT 5000
+        """,
+        (s,),
+    )
+    return [dict(r) for r in cur.fetchall()]
+
+
+def get_recent_ema_base_trades(conn: sqlite3.Connection, limit: int = 50) -> list[dict[str, Any]]:
+    cur = conn.execute(
+        """
+        SELECT * FROM scalp_trades
+        WHERE strategy IN ('ema_scalper', 'ema_scalper:base')
+        ORDER BY id DESC LIMIT ?
+        """,
+        (limit,),
+    )
+    return [dict(r) for r in cur.fetchall()]
+
+
+def get_equity_history_ema_base(
+    conn: sqlite3.Connection, deposit: float, limit: int = 100
+) -> list[float]:
+    cur = conn.execute(
+        """
+        SELECT pnl_usdt FROM scalp_trades
+        WHERE strategy IN ('ema_scalper', 'ema_scalper:base') AND pnl_usdt IS NOT NULL
+        ORDER BY id ASC
+        """,
     )
     rows = [float(r[0]) for r in cur.fetchall()]
     cum = float(deposit)

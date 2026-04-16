@@ -22,8 +22,15 @@ function resolveWsUrl(): string {
   return raw;
 }
 
+export type EmaTradeByDayPayload = {
+  date: string;
+  trades: Record<string, unknown>[];
+  error: string | null;
+};
+
 export function useWebSocket() {
   const [state, setState] = useState<BotState>(null);
+  const [emaTradeByDay, setEmaTradeByDay] = useState<EmaTradeByDayPayload | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const backoffRef = useRef(1000);
@@ -66,6 +73,14 @@ export function useWebSocket() {
         const msg = JSON.parse(ev.data as string) as Record<string, unknown>;
         if (msg.type === "state_update") {
           setState(msg);
+        } else if (msg.type === "ema_trade_history") {
+          setEmaTradeByDay({
+            date: String(msg.date ?? ""),
+            trades: Array.isArray(msg.trades)
+              ? (msg.trades as Record<string, unknown>[])
+              : [],
+            error: msg.error != null ? String(msg.error) : null,
+          });
         }
       } catch {
         /* ignore */
@@ -87,5 +102,13 @@ export function useWebSocket() {
     }
   }, []);
 
-  return { state, isConnected, sendMessage };
+  const requestEmaTradeDay = useCallback((date: string) => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ action: "ema_trade_day", date }));
+    }
+  }, []);
+
+  const clearEmaTradeDay = useCallback(() => setEmaTradeByDay(null), []);
+
+  return { state, isConnected, sendMessage, emaTradeByDay, requestEmaTradeDay, clearEmaTradeDay };
 }

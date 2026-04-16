@@ -22,6 +22,7 @@ class WsHub:
         on_close_pair: Callable[[str], Awaitable[None] | None],
         on_close_breakout: Callable[[str], Awaitable[None] | None] | None = None,
         on_close_ema_scalp: Callable[[str], Awaitable[None] | None] | None = None,
+        on_ema_trade_day: Callable[[str, Any], Awaitable[None]] | None = None,
     ) -> None:
         self._clients: set[Any] = set()
         self._on_pause = on_pause
@@ -30,6 +31,7 @@ class WsHub:
         self._on_close_pair = on_close_pair
         self._on_close_breakout = on_close_breakout
         self._on_close_ema_scalp = on_close_ema_scalp
+        self._on_ema_trade_day = on_ema_trade_day
         self._lock = asyncio.Lock()
 
     async def register(self, ws: Any) -> None:
@@ -57,7 +59,7 @@ class WsHub:
             for ws in dead:
                 self._clients.discard(ws)
 
-    async def handle_message(self, raw: str) -> None:
+    async def handle_message(self, raw: str, ws: Any) -> None:
         try:
             msg = json.loads(raw)
         except json.JSONDecodeError:
@@ -80,6 +82,10 @@ class WsHub:
             sym = str(msg.get("symbol") or "")
             if sym and self._on_close_ema_scalp:
                 await self._maybe_await(self._on_close_ema_scalp(sym))
+        elif action == "ema_trade_day":
+            if self._on_ema_trade_day:
+                ds = str(msg.get("date") or "").strip()
+                await self._on_ema_trade_day(ds, ws)
 
     @staticmethod
     async def _maybe_await(x: Any) -> None:
@@ -99,7 +105,7 @@ async def run_ws_server(
                 async for message in ws:
                     if isinstance(message, bytes):
                         message = message.decode("utf-8")
-                    await hub.handle_message(message)
+                    await hub.handle_message(message, ws)
             except ConnectionClosed:
                 pass  # обрыв без close frame / reconnect — не ошибка
             except OSError:

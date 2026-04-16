@@ -861,7 +861,7 @@ def _ema_auto_dynamic_min_score(
     lookback = int(auto_cfg.get("self_tune_lookback_trades", 40))
     min_samples = int(auto_cfg.get("self_tune_min_samples", 12))
     try:
-        recent = dbmod.get_recent_scalp_trades(conn, lookback, strategy="ema_scalper")
+        recent = dbmod.get_recent_ema_base_trades(conn, lookback)
     except Exception:
         return base_min_score
     closed = [r for r in recent if (r.get("pnl_usdt") is not None)]
@@ -902,7 +902,7 @@ def _ema_auto_tuner_state(conn: object | None, auto_cfg: dict, base_min_score: f
     if conn is None:
         return out
     try:
-        recent = dbmod.get_recent_scalp_trades(conn, lookback, strategy="ema_scalper")
+        recent = dbmod.get_recent_ema_base_trades(conn, lookback)
     except Exception:
         return out
     closed = [r for r in recent if (r.get("pnl_usdt") is not None)]
@@ -1101,18 +1101,23 @@ async def build_state_payload(rt: BotRuntime, metrics_by_pair: dict | None = Non
     ema_profiles_state: dict[str, dict] = {}
     if rt.conn:
         breakout_equity = dbmod.get_equity_history(rt.conn, "breakout", br_dep, 100)
-        ema_equity = dbmod.get_equity_history(rt.conn, "ema_scalper", es_dep, 100)
+        ema_equity = dbmod.get_equity_history_ema_base(rt.conn, es_dep, 100)
         br_st = dbmod.fetch_scalp_strategy_stats(rt.conn, "breakout")
-        ema_st = dbmod.fetch_scalp_strategy_stats(rt.conn, "ema_scalper:base")
+        ema_st = dbmod.fetch_ema_base_strategy_stats(rt.conn)
         if not ema_profiles_cfg:
             ema_profiles_cfg = [{"id": "base", "label": "BASE", "pairs": es_cfg_rt.get("pairs") or []}]
         for p in ema_profiles_cfg:
             pid = str(p.get("id") or "base")
             strat = f"ema_scalper:{pid}"
             p_dep = float((p.get("risk") or {}).get("balance_usdt", es_dep))
-            p_stats = dbmod.fetch_scalp_strategy_stats(rt.conn, strat)
-            p_trades = dbmod.get_recent_scalp_trades(rt.conn, 50, strategy=strat)
-            p_eq = dbmod.get_equity_history(rt.conn, strat, p_dep, 100)
+            if pid == "base":
+                p_stats = dbmod.fetch_ema_base_strategy_stats(rt.conn)
+                p_trades = dbmod.get_recent_ema_base_trades(rt.conn, 50)
+                p_eq = dbmod.get_equity_history_ema_base(rt.conn, p_dep, 100)
+            else:
+                p_stats = dbmod.fetch_scalp_strategy_stats(rt.conn, strat)
+                p_trades = dbmod.get_recent_scalp_trades(rt.conn, 50, strategy=strat)
+                p_eq = dbmod.get_equity_history(rt.conn, strat, p_dep, 100)
             p_positions = [
                 pos.to_dict(current_bar_ts_ms=rt.ema_current_bar_ts.get(ema_pos_key(pid, sym)))
                 for k, pos in rt.ema_positions.items()
@@ -2136,6 +2141,30 @@ async def main_async() -> None:
     async def on_close_ema_ws(symbol: str) -> None:
         await RT.close_ema_manual(symbol)
 
+    async def on_ema_trade_day_ws(date: str, ws: object) -> None:
+        out: dict[str, object] = {
+            "type": "ema_trade_history",
+            "date": date,
+            "trades": [],
+            "error": None,
+        }
+        try:
+            if not RT.conn:
+                out["error"] = "no_database"
+            else:
+                out["trades"] = dbmod.list_ema_base_trades_for_utc_day(RT.conn, date)
+        except Exception as e:
+            out["error"] = str(e)
+            logger.exception("ema_trade_day: запрос к БД")
+        try:
+            await ws.send(json.dumps(out, default=str))
+        except ConnectionClosed:
+            pass
+        except OSError:
+            pass
+        except Exception:
+            logger.warning("ema_trade_day: не удалось отправить ответ клиенту")
+
     RT.hub = WsHub(
         on_pause,
         on_resume,
@@ -2143,6 +2172,7 @@ async def main_async() -> None:
         on_close_pair,
         on_close_breakout=on_close_breakout_ws,
         on_close_ema_scalp=on_close_ema_ws,
+        on_ema_trade_day=on_ema_trade_day_ws,
     )
     port = int(RT.env.get("WS_PORT", 8765))
 

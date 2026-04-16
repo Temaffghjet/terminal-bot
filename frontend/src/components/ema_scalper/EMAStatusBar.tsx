@@ -9,11 +9,6 @@ type IndRow = {
   reason?: string;
 };
 
-type EmaDepositMeta = {
-  useExchangeBalance?: boolean;
-  balanceUsdt?: number;
-};
-
 function baseLabel(sym: string): string {
   const base = sym.split("/")[0] ?? sym;
   return base.replace(/^XYZ-/, "");
@@ -22,13 +17,10 @@ function baseLabel(sym: string): string {
 export default function EMAStatusBar({
   indicators,
   watchlist = [],
-  depositMeta,
 }: {
   indicators: Record<string, IndRow>;
   /** Все пары из config; для отсутствующих в indicators — строка «прогрев» */
   watchlist?: string[];
-  /** Источник депозита EMA: config или биржа */
-  depositMeta?: EmaDepositMeta;
 }) {
   const order =
     watchlist.length > 0
@@ -51,29 +43,6 @@ export default function EMAStatusBar({
   }
   return (
     <div className="flex flex-col gap-1 text-xs">
-      {depositMeta ? (
-        <div className="text-[10px] font-mono flex flex-wrap items-center gap-2 border border-gray-800 rounded px-2 py-1 bg-[#0a0a12]">
-          <span className="text-gray-500">EMA Deposit</span>
-          <span className="text-gray-600">|</span>
-          <span
-            className={
-              depositMeta.useExchangeBalance
-                ? "text-amber-300 border border-amber-700/60 px-1 rounded"
-                : "text-emerald-300 border border-emerald-700/60 px-1 rounded"
-            }
-            title={
-              depositMeta.useExchangeBalance
-                ? "Источник: баланс биржи (HL/USDC)"
-                : "Источник: config.yaml (balance_usdt)"
-            }
-          >
-            {depositMeta.useExchangeBalance ? "SRC: EXCH" : "SRC: CFG"}
-          </span>
-          <span className="text-gray-300">
-            ${Number(depositMeta.balanceUsdt ?? 0).toFixed(2)}
-          </span>
-        </div>
-      ) : null}
       {rows.map(({ sym, ind }) => {
         if (!ind) {
           return (
