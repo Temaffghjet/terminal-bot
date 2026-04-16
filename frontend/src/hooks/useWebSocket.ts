@@ -2,31 +2,22 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 export type BotState = Record<string, unknown> | null;
 
-const DEFAULT_PORT = import.meta.env.VITE_WS_PORT ?? "8765";
-
-/** ws:// / wss:// только; http(s) → ws(s) чтобы не падал new WebSocket при ошибке в Vercel env */
-function resolveWsUrl(): string {
-  const raw = import.meta.env.VITE_WS_URL?.trim();
-  if (!raw) {
-    return `ws://localhost:${DEFAULT_PORT}`;
-  }
-  if (raw.startsWith("ws://") || raw.startsWith("wss://")) {
-    return raw;
-  }
-  if (raw.startsWith("https://")) {
-    return `wss://${raw.slice("https://".length)}`;
-  }
-  if (raw.startsWith("http://")) {
-    return `ws://${raw.slice("http://".length)}`;
-  }
-  return raw;
-}
-
 export type EmaTradeByDayPayload = {
   date: string;
   trades: Record<string, unknown>[];
   error: string | null;
 };
+
+const DEFAULT_PORT = import.meta.env.VITE_WS_PORT ?? "8765";
+
+function resolveWsUrl(): string {
+  const raw = import.meta.env.VITE_WS_URL?.trim();
+  if (!raw) return `ws://localhost:${DEFAULT_PORT}`;
+  if (raw.startsWith("ws://") || raw.startsWith("wss://")) return raw;
+  if (raw.startsWith("https://")) return `wss://${raw.slice("https://".length)}`;
+  if (raw.startsWith("http://")) return `ws://${raw.slice("http://".length)}`;
+  return raw;
+}
 
 export function useWebSocket() {
   const [state, setState] = useState<BotState>(null);
@@ -43,11 +34,6 @@ export function useWebSocket() {
     try {
       ws = new WebSocket(url);
     } catch {
-      console.error(
-        "[WS] Неверный VITE_WS_URL. Нужен ws:// или wss:// на бота (порт",
-        DEFAULT_PORT,
-        "), не http://localhost:5173"
-      );
       return;
     }
     wsRef.current = ws;
@@ -64,21 +50,16 @@ export function useWebSocket() {
       timerRef.current = setTimeout(connect, delay);
     };
 
-    ws.onerror = () => {
-      ws.close();
-    };
+    ws.onerror = () => ws.close();
 
     ws.onmessage = (ev) => {
       try {
         const msg = JSON.parse(ev.data as string) as Record<string, unknown>;
-        if (msg.type === "state_update") {
-          setState(msg);
-        } else if (msg.type === "ema_trade_history") {
+        if (msg.type === "state_update") setState(msg);
+        else if (msg.type === "ema_trade_history") {
           setEmaTradeByDay({
             date: String(msg.date ?? ""),
-            trades: Array.isArray(msg.trades)
-              ? (msg.trades as Record<string, unknown>[])
-              : [],
+            trades: Array.isArray(msg.trades) ? (msg.trades as Record<string, unknown>[]) : [],
             error: msg.error != null ? String(msg.error) : null,
           });
         }

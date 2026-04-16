@@ -3,22 +3,6 @@
 @tailwind utilities;
 
 body {
-  margin: 0;
-  font-family: "JetBrains Mono", "IBM Plex Mono", ui-monospace, monospace;
-}
-
-@keyframes pulse-dot {
-  0%,
-  100% {
-    opacity: 1;
-    transform: scale(1);
-  }
-  50% {
-    opacity: 0.5;
-    transform: scale(1.2);
-  }
-}
-
-.animate-pulse-dot {
-  animation: pulse-dot 1.5s ease-in-out infinite;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+  font-size: 13px;
 }

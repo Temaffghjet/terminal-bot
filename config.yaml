@@ -1,6 +1,6 @@
-# Hyperliquid + EMA Scalper 5m. Секреты: HYPERLIQUID_* в .env
-# Stat-arb / breakout / старый scalping 1m в коде выключены — см. strategy.mode + флаги enabled.
-# Пресет как 2026-04-14 (2f11d25), симуляция: balance_usdt 500, без баланса с биржи.
+# Пресет 2026-04-14 (2f11d25): EMA 5m HL, ETH/BTC/SOL, автотюнер.
+# Симуляция маржи на $500 — не подтягиваем баланс с биржи для расчёта позиции.
+# Секреты: HYPERLIQUID_* в .env
 
 exchange:
   name: hyperliquid
@@ -18,7 +18,6 @@ pairs: []
 
 risk:
   max_position_usdt: 500
-  # Запас под несколько EMA-позиций (маржа × число слотов); при симуляции не критично
   max_total_exposure: 500000
   max_daily_loss_pct: 3.0
   leverage: 5
@@ -49,9 +48,7 @@ ema_scalper:
     volume_multiplier: 1.5
     min_candles_above_below: 3
     max_candles_above_below: 8
-    # strict = импульс по расширению от EMA (часто поздно); loose = направление+свеча
     momentum_mode: loose
-    # не входить, если цена дальше N%% от EMA на 5m (0 = выкл.)
     entry_max_distance_from_ema_pct: 0.4
     min_candle_body_pct: 0.05
     no_trade_hours_utc: [2, 3, 4]
@@ -76,7 +73,6 @@ ema_scalper:
     max_hold_candles: 6
     ema_cross_exit: false
   risk:
-    # Симуляция на $500 (как просили); расчёт маржи не от кошелька HL
     use_exchange_balance: false
     balance_usdt: 500
     position_size_pct: 25
@@ -94,7 +90,6 @@ ema_scalper:
     max_position_pct: 35
     min_leverage: 3
     max_leverage: 5
-    # На real-трейде лучше держать false, пока не откалибруем модель
     allow_live_dynamic_leverage: false
     min_tp_pct: 0.5
     max_tp_pct: 1.0

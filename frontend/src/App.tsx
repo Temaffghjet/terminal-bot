@@ -1,305 +1,300 @@
-import React, { useMemo } from "react";
-import ControlPanel, { type EmaSlotDisplay, type TradingCapitalPayload } from "./components/ControlPanel";
-import PnLPanel from "./components/PnLPanel";
-import ActivePositionsTable from "./components/ActivePositionsTable";
-import RiskMonitor from "./components/RiskMonitor";
-import ScalpingStats from "./components/ScalpingStats";
-import SignalIndicator, { type ScalpIndicatorSnapshot } from "./components/SignalIndicator";
-import ModeBanner from "./components/ModeBanner";
-import SpreadChart from "./components/SpreadChart";
-import TradeLog from "./components/TradeLog";
-import BreakoutPositions from "./components/breakout/BreakoutPositions";
-import BreakoutSignalMonitor from "./components/breakout/BreakoutSignalMonitor";
-import BreakoutStats from "./components/breakout/BreakoutStats";
-import EMAStatusBar from "./components/ema_scalper/EMAStatusBar";
-import EMAPositionCard from "./components/ema_scalper/EMAPositionCard";
-import EMAStatsPanel from "./components/ema_scalper/EMAStatsPanel";
-import EMAMiniChart from "./components/ema_scalper/EMAMiniChart";
-import EMATradeLog from "./components/ema_scalper/EMATradeLog";
-import EMAEntryAnalytics from "./components/ema_scalper/EMAEntryAnalytics";
-import EMAAutoTunerPanel from "./components/ema_scalper/EMAAutoTunerPanel";
+import { useMemo, useState } from "react";
 import { useWebSocket } from "./hooks/useWebSocket";
 
-const ENTRY_Z = 1.5;
-const STOP_Z = 3.0;
+type EmaPos = {
+  symbol?: string;
+  side?: string;
+  entry_price?: number;
+  current_price?: number;
+  pnl_usdt?: number;
+  size_usdt?: number;
+  notional_usdt?: number;
+  leverage?: number;
+  entry_reason?: string;
+  tp_price?: number;
+  sl_price?: number;
+  candles_held?: number;
+  max_hold_candles?: number;
+};
 
-function emaSymbolBaseShort(symbol: string): string {
-  const base = symbol.split("/")[0] ?? symbol;
-  return base.replace(/^XYZ-/, "");
+type Row = Record<string, unknown>;
+
+function utcYmd(ts: unknown): string {
+  const s = String(ts ?? "");
+  return s.length >= 10 ? s.slice(0, 10) : "";
+}
+
+function fmtDt(ts: unknown): { d: string; t: string } {
+  const s = String(ts ?? "");
+  if (s.length >= 19) {
+    return { d: s.slice(0, 10), t: s.slice(11, 19) };
+  }
+  return { d: s.slice(0, 10), t: "" };
+}
+
+function notionWithLev(t: Row): number {
+  const lev = Math.max(1, Number(t.leverage ?? 1));
+  const margin = Number(t.size_usdt ?? 0);
+  let n = Number(t.notional ?? 0);
+  if (!(n > 0) && margin > 0) n = margin * lev;
+  return n;
 }
 
 export default function App() {
-  const { state, isConnected, sendMessage, emaTradeByDay, requestEmaTradeDay, clearEmaTradeDay } =
-    useWebSocket();
+  const { state, isConnected, emaTradeByDay, requestEmaTradeDay, clearEmaTradeDay } = useWebSocket();
 
-  const botStatus = (state?.bot_status as string) ?? "stopped";
-  const strategyMode = (state?.strategy_mode as string) ?? "pairs";
-  const exchangeName = (state?.exchange_name as string) ?? "";
-  const positions = (state?.positions as React.ComponentProps<typeof PnLPanel>["positions"]) ?? [];
-  const metrics =
-    (state?.metrics as Record<string, { zscore?: number | null; spread_history?: number[]; zscore_history?: number[] }>) ??
-    {};
-  const pnl = (state?.pnl as { total_today?: number; unrealized?: number; realized_today?: number }) ?? {};
-  const trades = (state?.trades_recent as React.ComponentProps<typeof TradeLog>["trades"]) ?? [];
-  const flags = (state?.config_flags as {
-    dry_run?: boolean;
-    testnet?: boolean;
-    risk_leverage?: number;
-  }) ?? {
-    dry_run: true,
-    testnet: true,
-  };
-  const tradingCapital = (state?.trading_capital as TradingCapitalPayload | undefined) ?? null;
-
-  const sm = state?.scalping_metrics as
+  const ema = state?.ema_scalper as
     | {
-        todayStats?: React.ComponentProps<typeof ScalpingStats>["today"];
-        currentSignal?: Record<string, Record<string, unknown>>;
-        dailyProgress?: React.ComponentProps<typeof RiskMonitor>["dailyProgress"];
-        riskMonitor?: React.ComponentProps<typeof RiskMonitor>["riskMonitor"];
-      }
-    | undefined;
-
-  const totalPairs = Object.keys(metrics).length || 1;
-  const openPairs = positions.length;
-
-  const todayPnl = Number(pnl.total_today ?? pnl.realized_today ?? 0);
-  const unrealized = Number(pnl.unrealized ?? 0);
-
-  const closed = trades.filter((t) => t.action === "CLOSE" && t.pnl_usdt != null);
-  const wins = closed.filter((t) => (t.pnl_usdt ?? 0) > 0).length;
-  const winRate = closed.length ? (wins / closed.length) * 100 : 0;
-
-  const breakoutState = state?.breakout as
-    | {
-        positions?: React.ComponentProps<typeof BreakoutPositions>["positions"];
-        last_signals?: Record<string, { signal?: string; volume_ratio?: number; breakout_level?: number }>;
-        stats_today?: React.ComponentProps<typeof BreakoutStats>["statsToday"];
+        positions?: EmaPos[];
         stats?: Record<string, unknown>;
-        equity_history?: number[];
+        recent_trades?: Row[];
       }
     | undefined;
 
-  const emaState = state?.ema_scalper as
-    | {
-        positions?: React.ComponentProps<typeof EMAPositionCard>["positions"];
-        indicators?: Record<string, Record<string, unknown>>;
-        stats?: Record<string, unknown>;
-        candle_history?: Record<string, { ts: number; close: number; ema: number }[]>;
-        recent_trades?: Record<string, unknown>[];
-        /** Пары из config.yaml (enabled) */
-        enabled_symbols?: string[];
-        max_open_positions?: number;
-        auto_tuner?: Record<string, unknown>;
-        auto_tuner_history?: Record<string, unknown>[];
-      }
-    | undefined;
+  const positions = (ema?.positions ?? []) as EmaPos[];
+  const stats = ema?.stats ?? {};
+  const recent = (ema?.recent_trades ?? []) as Row[];
 
-  const emaSlotDisplay: EmaSlotDisplay | null = useMemo(() => {
-    const syms = emaState?.enabled_symbols;
-    if (!syms?.length) return null;
-    const open = emaState?.positions?.length ?? 0;
-    const max = emaState?.max_open_positions ?? 2;
-    return { label: "EMA слоты", open, max };
-  }, [
-    emaState?.enabled_symbols,
-    emaState?.positions?.length,
-    emaState?.max_open_positions,
-  ]);
-
-  const emaWatchlistShort = useMemo(
-    () => (emaState?.enabled_symbols ?? []).map(emaSymbolBaseShort),
-    [emaState?.enabled_symbols],
+  const openMargin = useMemo(
+    () => positions.reduce((s, p) => s + Number(p.size_usdt ?? 0), 0),
+    [positions],
+  );
+  const openUnrealized = useMemo(
+    () => positions.reduce((s, p) => s + Number(p.pnl_usdt ?? 0), 0),
+    [positions],
   );
 
-  const breakoutOpenSyms = useMemo(() => {
-    const s = new Set<string>();
-    for (const p of breakoutState?.positions ?? []) {
-      if (p.status === "OPEN") s.add(p.symbol);
+  const todayPnl = Number(stats.today_pnl ?? stats["today_pnl"] ?? 0);
+  const todayTrades = Number(stats.today_trades ?? 0);
+
+  const todayUtc = new Date().toISOString().slice(0, 10);
+  const closedToday = useMemo(
+    () => recent.filter((t) => utcYmd(t.timestamp_close) === todayUtc),
+    [recent, todayUtc],
+  );
+  const fixedList = closedToday.length ? closedToday : recent.slice(0, 15);
+
+  const [historyMode, setHistoryMode] = useState<"feed" | "day">("feed");
+  const [dayPick, setDayPick] = useState(() => {
+    const d = new Date();
+    d.setUTCDate(d.getUTCDate() - 1);
+    return d.toISOString().slice(0, 10);
+  });
+
+  const historyRows: Row[] = useMemo(() => {
+    if (historyMode === "day" && emaTradeByDay?.date && !emaTradeByDay.error) {
+      return emaTradeByDay.trades;
     }
-    return s;
-  }, [breakoutState?.positions]);
+    return recent;
+  }, [historyMode, emaTradeByDay, recent]);
 
-  const emaPolicy = useMemo(() => {
-    const c = tradingCapital?.config;
-    if (c == null || c.ema_balance_usdt == null) return null;
-    const pct = c.ema_position_size_pct ?? 25;
-    const lev = c.ema_leverage ?? 5;
-    const margin = Number(c.ema_balance_usdt) * (pct / 100);
-    if (!(margin > 0)) return null;
-    return { marginUsdt: margin, nominalUsdt: margin * lev, leverage: lev };
-  }, [tradingCapital]);
+  const loadDayHistory = () => {
+    setHistoryMode("day");
+    requestEmaTradeDay(dayPick.trim());
+  };
 
-  const emaChartSym = useMemo(() => {
-    const pos0 = emaState?.positions?.[0]?.symbol;
-    if (pos0) return pos0;
-    const ch = emaState?.candle_history ?? {};
-    const keys = Object.keys(ch);
-    if (keys.length) return keys[0];
-    const ind = emaState?.indicators ?? {};
-    const ik = Object.keys(ind);
-    if (ik.length) return ik[0];
-    return (emaState?.enabled_symbols ?? [])[0] ?? "";
-  }, [
-    emaState?.candle_history,
-    emaState?.indicators,
-    emaState?.positions,
-    emaState?.enabled_symbols,
-  ]);
-
-  const emaChartCandles = emaChartSym ? emaState?.candle_history?.[emaChartSym] ?? [] : [];
-  const emaOpenPos = emaState?.positions?.[0];
-  const emaPosForChart =
-    emaOpenPos && emaChartSym && emaOpenPos.symbol === emaChartSym
-      ? {
-          entry_price: emaOpenPos.entry_price,
-          tp_price: emaOpenPos.tp_price,
-          sl_price: emaOpenPos.sl_price,
-          side: emaOpenPos.side,
-        }
-      : null;
+  const backToFeedHistory = () => {
+    setHistoryMode("feed");
+    clearEmaTradeDay();
+  };
 
   return (
-    <div className="min-h-screen flex flex-col bg-terminal-bg text-gray-100 font-mono text-sm">
-      <ModeBanner testnet={flags.testnet !== false} dryRun={flags.dry_run !== false} />
-      {!isConnected && (
-        <div className="border-b border-amber-700/50 bg-amber-950/50 px-3 py-2 text-amber-100/95 text-xs leading-snug">
-          Нет WebSocket к боту — поля «Биржа» и «Сумма для торговли» пустые: данные не с сервера. На Vercel
-          задайте <code className="text-amber-200">VITE_WS_URL=wss://ваш-хост:порт</code> (где крутится Python-бот)
-          и пересоберите проект; локально запустите бота на порту из <code className="text-amber-200">VITE_WS_PORT</code>
-          .
-        </div>
-      )}
-      <div className="border-b border-gray-800 px-3 py-1.5 bg-[#080810] text-[11px] text-gray-400 flex flex-wrap gap-x-6 gap-y-1 items-center">
-        <span>
-          Биржа:{" "}
-          <span className="text-terminal-profit font-semibold uppercase">{exchangeName || "—"}</span>
-          {strategyMode === "scalping" && (
-            <span className="ml-2 text-gray-600">live-данные с биржи из config (exchange.name).</span>
-          )}
-        </span>
-      </div>
-
-      <ControlPanel
-        botStatus={isConnected ? botStatus : "stopped"}
-        isConnected={isConnected}
-        openPairs={openPairs}
-        totalPairs={totalPairs}
-        emaSlotDisplay={emaSlotDisplay}
-        emaWatchlistShort={emaWatchlistShort.length ? emaWatchlistShort : null}
-        todayPnl={todayPnl}
-        unrealized={unrealized}
-        winRate={winRate}
-        dryRun={flags.dry_run !== false}
-        testnet={flags.testnet !== false}
-        tradingCapital={tradingCapital}
-        strategyMode={strategyMode}
-        onPause={() => sendMessage({ action: "pause" })}
-        onResume={() => sendMessage({ action: "resume" })}
-        onEmergency={() => sendMessage({ action: "emergency_stop" })}
-        onPauseAfterLoss={
-          strategyMode === "scalping" ? () => sendMessage({ action: "pause" }) : undefined
-        }
-      />
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-0 flex-1 min-h-0">
-        <div className="min-h-[320px] lg:min-h-0 border-b lg:border-b-0 lg:border-r border-gray-800 flex flex-col min-h-0">
-          <PnLPanel
-            positions={positions}
-            totalUnrealized={unrealized}
-            totalRealized={todayPnl}
-            onClosePair={(pairId) => sendMessage({ action: "close_pair", pair_id: pairId })}
-          />
-          {strategyMode === "scalping" && (
-            <div className="p-2 border-t border-gray-800 grid grid-cols-1 sm:grid-cols-2 gap-2 overflow-auto max-h-[280px]">
-              <ScalpingStats today={sm?.todayStats ?? {}} />
-              <RiskMonitor dailyProgress={sm?.dailyProgress} riskMonitor={sm?.riskMonitor} />
-              <ActivePositionsTable positions={positions} />
-              <SignalIndicator signals={(sm?.currentSignal ?? {}) as Record<string, ScalpIndicatorSnapshot>} />
+    <div className="min-h-screen flex flex-col bg-slate-950 text-slate-200">
+      {/* Верх: баланс по открытым */}
+      <header className="border-b border-slate-800 px-4 py-3 shrink-0 bg-slate-900/80">
+        <div className="flex flex-wrap items-baseline justify-between gap-3">
+          <h1 className="text-sm font-semibold text-emerald-400/90 tracking-wide">EMA Scalper</h1>
+          <div className="flex flex-wrap gap-6 text-xs font-mono">
+            <div>
+              <span className="text-slate-500">Маржа в открытых </span>
+              <span className="text-amber-200">${openMargin.toFixed(2)}</span>
+              <span className="text-slate-600"> USDT</span>
             </div>
-          )}
-        </div>
-        <div className="min-h-[420px] lg:min-h-0">
-          <SpreadChart
-            metricsByPair={metrics}
-            entryZ={ENTRY_Z}
-            stopZ={STOP_Z}
-            scalpMode={strategyMode === "scalping"}
-          />
-        </div>
-      </div>
-
-      {state?.breakout != null &&
-      ((breakoutState?.last_signals && Object.keys(breakoutState.last_signals).length > 0) ||
-        (breakoutState?.positions && breakoutState.positions.length > 0)) ? (
-        <div className="border-t border-gray-800 p-3 space-y-3 bg-black/20">
-          <h2 className="text-amber-500/90 text-xs uppercase tracking-wider">Breakout (1H)</h2>
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
-            <BreakoutSignalMonitor
-              lastSignals={breakoutState?.last_signals ?? {}}
-              openSymbols={breakoutOpenSyms}
-            />
-            <BreakoutPositions
-              positions={breakoutState?.positions ?? []}
-              sendMessage={sendMessage}
-            />
-            <BreakoutStats
-              statsToday={breakoutState?.stats_today ?? {}}
-              stats={(breakoutState?.stats ?? {}) as React.ComponentProps<typeof BreakoutStats>["stats"]}
-              equityHistory={breakoutState?.equity_history ?? []}
-            />
+            <div>
+              <span className="text-slate-500">Нереализ. P&amp;L </span>
+              <span className={openUnrealized >= 0 ? "text-emerald-400" : "text-rose-400"}>
+                ${openUnrealized.toFixed(4)}
+              </span>
+            </div>
+            <div className="text-slate-600">
+              WS: {isConnected ? <span className="text-emerald-500">online</span> : <span className="text-rose-500">offline</span>}
+            </div>
           </div>
         </div>
-      ) : null}
+      </header>
 
-      {state?.ema_scalper != null ? (
-        <div className="border-t border-gray-800 p-3 space-y-3 bg-black/20">
-          <h2 className="text-emerald-500/90 text-xs uppercase tracking-wider">EMA Scalper (5m)</h2>
-          {Object.keys(emaState?.indicators ?? {}).length === 0 &&
-          !(emaState?.positions?.length ?? 0) &&
-          !(emaState?.recent_trades?.length ?? 0) &&
-          !(emaState?.enabled_symbols?.length ?? 0) ? (
-            <p className="text-gray-600 text-xs">EMA: прогрев данных или стратегия без активных пар</p>
-          ) : (
-            <>
-              <EMAStatusBar
-                indicators={(emaState?.indicators ?? {}) as Record<string, Record<string, unknown>>}
-                watchlist={emaState?.enabled_symbols ?? []}
-              />
-              <EMAEntryAnalytics
-                indicators={(emaState?.indicators ?? {}) as Record<string, Record<string, unknown>>}
-                watchlist={emaState?.enabled_symbols ?? []}
-              />
-              <EMAAutoTunerPanel
-                tuner={
-                  (emaState?.auto_tuner ?? {}) as React.ComponentProps<typeof EMAAutoTunerPanel>["tuner"]
-                }
-                history={
-                  (emaState?.auto_tuner_history ?? []) as React.ComponentProps<
-                    typeof EMAAutoTunerPanel
-                  >["history"]
-                }
-              />
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-                <EMAPositionCard positions={emaState?.positions ?? []} sendMessage={sendMessage} />
-                <div className="space-y-2">
-                  <div className="text-[10px] text-gray-500">Мини-график: {emaChartSym || "—"}</div>
-                  <EMAMiniChart candles={emaChartCandles} position={emaPosForChart} />
-                </div>
-              </div>
-              <EMAStatsPanel stats={(emaState?.stats ?? {}) as React.ComponentProps<typeof EMAStatsPanel>["stats"]} />
-              <EMATradeLog
-                trades={emaState?.recent_trades ?? []}
-                emaTradeByDay={emaTradeByDay}
-                requestEmaTradeDay={requestEmaTradeDay}
-                clearEmaTradeDay={clearEmaTradeDay}
-              />
-            </>
-          )}
+      {/* PnL за день */}
+      <section className="border-b border-slate-800 px-4 py-2 bg-slate-900/40 shrink-0">
+        <div className="text-xs font-mono flex flex-wrap gap-6">
+          <span className="text-slate-500 uppercase text-[10px] tracking-wider">PnL за день (UTC)</span>
+          <span>
+            Сегодня:{" "}
+            <span className={todayPnl >= 0 ? "text-emerald-400" : "text-rose-400"}>${todayPnl.toFixed(4)}</span>
+          </span>
+          <span className="text-slate-500">Сделок сегодня: {todayTrades}</span>
         </div>
-      ) : null}
+      </section>
 
-      <TradeLog trades={trades} scalpLeverage={flags.risk_leverage ?? 5} emaPolicy={emaPolicy} />
+      {/* Открытые | Зафиксированные */}
+      <section className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-2 gap-0 border-b border-slate-800">
+        <div className="border-b lg:border-b-0 lg:border-r border-slate-800 flex flex-col min-h-[220px] max-h-[42vh]">
+          <div className="px-3 py-1.5 text-[10px] uppercase tracking-wider text-slate-500 border-b border-slate-800 shrink-0">
+            Открытые позиции
+          </div>
+          <div className="overflow-auto flex-1 p-2 space-y-2">
+            {!positions.length ? (
+              <p className="text-slate-600 text-xs p-2">Нет открытых EMA-позиций</p>
+            ) : (
+              positions.map((p, i) => (
+                <div
+                  key={`${p.symbol}-${i}`}
+                  className="border border-slate-800 rounded p-2 bg-slate-900/50 text-[11px] font-mono"
+                >
+                  <div className="flex justify-between gap-2">
+                    <span className="text-emerald-300/90">{String(p.symbol ?? "")}</span>
+                    <span className={p.side === "LONG" ? "text-sky-400" : "text-orange-400"}>{p.side}</span>
+                  </div>
+                  <div className="mt-1 grid grid-cols-2 gap-x-3 gap-y-0.5 text-slate-400">
+                    <span>Вход</span>
+                    <span className="text-right text-slate-200">{Number(p.entry_price ?? 0).toFixed(2)}</span>
+                    <span>Сейчас</span>
+                    <span className="text-right text-slate-200">{Number(p.current_price ?? 0).toFixed(2)}</span>
+                    <span>Маржа</span>
+                    <span className="text-right text-amber-200/90">${Number(p.size_usdt ?? 0).toFixed(2)}</span>
+                    <span>С плечом</span>
+                    <span className="text-right">${Number(p.notional_usdt ?? 0).toFixed(2)} ×{p.leverage ?? 1}</span>
+                    <span>P&amp;L нер.</span>
+                    <span
+                      className={`text-right ${Number(p.pnl_usdt ?? 0) >= 0 ? "text-emerald-400" : "text-rose-400"}`}
+                    >
+                      ${Number(p.pnl_usdt ?? 0).toFixed(4)}
+                    </span>
+                  </div>
+                  {p.entry_reason ? (
+                    <div className="mt-1 text-[10px] text-slate-500 truncate" title={String(p.entry_reason)}>
+                      Вход: {String(p.entry_reason)}
+                    </div>
+                  ) : null}
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+
+        <div className="flex flex-col min-h-[220px] max-h-[42vh]">
+          <div className="px-3 py-1.5 text-[10px] uppercase tracking-wider text-slate-500 border-b border-slate-800 shrink-0">
+            Зафиксировано {closedToday.length ? `(сегодня UTC ${todayUtc})` : "(последние в ленте)"}
+          </div>
+          <div className="overflow-auto flex-1 p-2 space-y-2">
+            {!fixedList.length ? (
+              <p className="text-slate-600 text-xs p-2">Нет закрытых сделок в выборке</p>
+            ) : (
+              fixedList.map((t) => {
+                const { d, t: tm } = fmtDt(t.timestamp_close);
+                const pnl = Number(t.pnl_usdt ?? 0);
+                return (
+                  <div
+                    key={String(t.id)}
+                    className="border border-slate-800/80 rounded p-2 bg-slate-900/30 text-[11px] font-mono"
+                  >
+                    <div className="flex justify-between">
+                      <span className="text-slate-300">{String(t.symbol ?? "")}</span>
+                      <span className={pnl >= 0 ? "text-emerald-400" : "text-rose-400"}>${pnl.toFixed(4)}</span>
+                    </div>
+                    <div className="text-[10px] text-slate-500 mt-0.5">
+                      {d} {tm}
+                    </div>
+                    <div className="mt-1 text-[10px] text-slate-500">
+                      {String(t.close_reason ?? "")} · маржа ${Number(t.size_usdt ?? 0).toFixed(2)}
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+      </section>
+
+      {/* История — полная таблица */}
+      <section className="flex flex-col min-h-[280px] flex-1 border-t border-slate-800">
+        <div className="flex flex-wrap items-center gap-2 px-3 py-1.5 border-b border-slate-800 bg-slate-900/30 shrink-0">
+          <span className="text-[10px] uppercase tracking-wider text-slate-500">История сделок</span>
+          <input
+            type="date"
+            className="bg-slate-900 border border-slate-700 rounded px-1 py-0.5 text-[11px]"
+            value={dayPick}
+            onChange={(e) => setDayPick(e.target.value)}
+          />
+          <button
+            type="button"
+            className="text-[11px] px-2 py-0.5 rounded bg-emerald-900/50 border border-emerald-800 text-emerald-100"
+            onClick={loadDayHistory}
+          >
+            Загрузить день из БД
+          </button>
+          {historyMode === "day" ? (
+            <button
+              type="button"
+              className="text-[11px] px-2 py-0.5 rounded bg-slate-800 border border-slate-600"
+              onClick={backToFeedHistory}
+            >
+              Лента с сервера
+            </button>
+          ) : null}
+          {historyMode === "day" && emaTradeByDay?.error ? (
+            <span className="text-rose-400 text-[11px]">{emaTradeByDay.error}</span>
+          ) : null}
+        </div>
+        <div className="overflow-auto flex-1">
+          <table className="w-full text-left text-[11px] font-mono border-collapse">
+            <thead className="sticky top-0 bg-slate-900 text-slate-500 border-b border-slate-800">
+              <tr>
+                <th className="p-1.5 font-normal">Дата</th>
+                <th className="p-1.5 font-normal">Время UTC</th>
+                <th className="p-1.5 font-normal">Пара</th>
+                <th className="p-1.5 font-normal text-right">Вход</th>
+                <th className="p-1.5 font-normal text-right">Выход</th>
+                <th className="p-1.5 font-normal text-right">Маржа</th>
+                <th className="p-1.5 font-normal text-right">С плечом</th>
+                <th className="p-1.5 font-normal">Причина входа</th>
+                <th className="p-1.5 font-normal">Выход (reason)</th>
+                <th className="p-1.5 font-normal text-right">P&amp;L</th>
+              </tr>
+            </thead>
+            <tbody>
+              {historyRows.map((t) => {
+                const { d, t: tm } = fmtDt(t.timestamp_close);
+                const pnl = Number(t.pnl_usdt ?? 0);
+                const n = notionWithLev(t);
+                const lev = Math.max(1, Number(t.leverage ?? 1));
+                return (
+                  <tr key={String(t.id)} className="border-b border-slate-800/80 hover:bg-slate-900/50">
+                    <td className="p-1.5 text-slate-400">{d}</td>
+                    <td className="p-1.5 text-slate-400">{tm}</td>
+                    <td className="p-1.5">{String(t.symbol ?? "")}</td>
+                    <td className="p-1.5 text-right">{Number(t.entry_price ?? 0).toFixed(4)}</td>
+                    <td className="p-1.5 text-right">{Number(t.exit_price ?? 0).toFixed(4)}</td>
+                    <td className="p-1.5 text-right text-amber-200/80">${Number(t.size_usdt ?? 0).toFixed(2)}</td>
+                    <td className="p-1.5 text-right text-slate-300">
+                      ${n.toFixed(2)} <span className="text-slate-600">×{lev}</span>
+                    </td>
+                    <td className="p-1.5 text-slate-400 max-w-[140px] truncate" title={String(t.entry_reason ?? "")}>
+                      {String(t.entry_reason ?? "—")}
+                    </td>
+                    <td className="p-1.5 text-slate-400">{String(t.close_reason ?? "—")}</td>
+                    <td className={`p-1.5 text-right ${pnl >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+                      {pnl.toFixed(4)}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          {!historyRows.length ? (
+            <p className="p-4 text-slate-600 text-xs">Нет строк. Подключите бота или загрузите день из БД.</p>
+          ) : null}
+        </div>
+      </section>
     </div>
   );
 }

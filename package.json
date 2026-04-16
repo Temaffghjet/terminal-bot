@@ -1,7 +1,7 @@
 {
   "name": "terminal-bot",
   "private": true,
-  "description": "Корень монорепо: Vercel собирает только frontend (см. vercel.json). Бот — Python в /backend.",
+  "description": "Python-бот + Vite UI в frontend/ (см. vercel.json).",
   "scripts": {
     "build": "npm run build --prefix frontend",
     "install:frontend": "npm ci --prefix frontend"
