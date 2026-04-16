@@ -1,0 +1,22 @@
+# Пример для systemd: скопируйте и поправьте пути под свой сервер.
+# sudo cp systemd/terminal-bot.service.example /etc/systemd/system/terminal-bot.service
+# sudo systemctl daemon-reload && sudo systemctl enable --now terminal-bot
+#
+# ВАЖНО: WorkingDirectory и путь к python должны указывать на ОДИН каталог с кодом и .venv
+
+[Unit]
+Description=Terminal trading bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/terminal-bot
+Environment=PATH=/root/terminal-bot/.venv/bin
+ExecStart=/root/terminal-bot/.venv/bin/python -m backend.main
+Restart=always
+RestartSec=15
+TimeoutStopSec=120
+
+[Install]
+WantedBy=multi-user.target
