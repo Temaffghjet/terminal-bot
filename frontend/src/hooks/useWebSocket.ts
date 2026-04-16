@@ -10,13 +10,18 @@ export type EmaTradeByDayPayload = {
 
 const DEFAULT_PORT = import.meta.env.VITE_WS_PORT ?? "8765";
 
-function resolveWsUrl(): string {
+/** Адрес, к которому реально подключается клиент (для подсказок в UI). */
+export function getWebSocketTargetUrl(): string {
   const raw = import.meta.env.VITE_WS_URL?.trim();
   if (!raw) return `ws://localhost:${DEFAULT_PORT}`;
   if (raw.startsWith("ws://") || raw.startsWith("wss://")) return raw;
   if (raw.startsWith("https://")) return `wss://${raw.slice("https://".length)}`;
   if (raw.startsWith("http://")) return `ws://${raw.slice("http://".length)}`;
   return raw;
+}
+
+function resolveWsUrl(): string {
+  return getWebSocketTargetUrl();
 }
 
 export function useWebSocket() {
@@ -91,5 +96,13 @@ export function useWebSocket() {
 
   const clearEmaTradeDay = useCallback(() => setEmaTradeByDay(null), []);
 
-  return { state, isConnected, sendMessage, emaTradeByDay, requestEmaTradeDay, clearEmaTradeDay };
+  return {
+    state,
+    isConnected,
+    wsUrl: getWebSocketTargetUrl(),
+    sendMessage,
+    emaTradeByDay,
+    requestEmaTradeDay,
+    clearEmaTradeDay,
+  };
 }
