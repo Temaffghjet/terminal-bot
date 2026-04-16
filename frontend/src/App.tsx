@@ -46,19 +46,22 @@ function botStatusLabel(
   status: string | undefined,
 ): { text: string; className: string } {
   if (!isConnected) {
-    return { text: "Нет связи с ботом", className: "bg-slate-200 text-slate-700 border-slate-300" };
+    return { text: "Нет связи с ботом", className: "border-cp-line bg-cp-panel2 text-cp-muted" };
   }
   const s = (status ?? "").toLowerCase();
   if (s === "running") {
-    return { text: "Бот работает", className: "bg-emerald-100 text-emerald-800 border-emerald-300" };
+    return {
+      text: "Бот работает",
+      className: "border-cp-green/50 bg-cp-green/10 text-cp-green shadow-[0_0_12px_rgba(57,255,20,0.25)]",
+    };
   }
   if (s === "paused") {
-    return { text: "Пауза", className: "bg-amber-100 text-amber-900 border-amber-300" };
+    return { text: "Пауза", className: "border-cp-amber/60 bg-cp-amber/10 text-cp-amber" };
   }
   if (s === "stopped") {
-    return { text: "Остановлен", className: "bg-slate-200 text-slate-700 border-slate-300" };
+    return { text: "Остановлен", className: "border-cp-line bg-cp-panel2 text-cp-muted" };
   }
-  return { text: status || "—", className: "bg-slate-100 text-slate-800 border-slate-300" };
+  return { text: status || "—", className: "border-cp-line bg-cp-panel text-slate-300" };
 }
 
 export default function App() {
@@ -91,7 +94,27 @@ export default function App() {
         const allow = Boolean(ind.auto_allow_trade);
         const close = Number(ind.close ?? 0);
         const emaNow = Number(ind.ema_current ?? 0);
-        return { symbol, ready, side, reason, score, allow, close, emaNow };
+        const rawConf = ind.entry_confidence_score;
+        const conf =
+          rawConf !== undefined && rawConf !== null && String(rawConf) !== ""
+            ? Number(rawConf)
+            : null;
+        const confOk = conf !== null && Number.isFinite(conf);
+        return {
+          symbol,
+          ready,
+          side,
+          reason,
+          score,
+          allow,
+          close,
+          emaNow,
+          conf: confOk ? conf : null,
+          oteL: Boolean(ind.in_ote_long),
+          oteS: Boolean(ind.in_ote_short),
+          obB: Boolean(ind.price_in_bullish_ob),
+          obBe: Boolean(ind.price_in_bearish_ob),
+        };
       });
   }, [indicators]);
 
@@ -143,35 +166,38 @@ export default function App() {
   const isLocalWs = /localhost|127\.0\.0\.1/i.test(wsUrl);
 
   return (
-    <div className="min-h-screen flex flex-col bg-white text-slate-900">
+    <div className="min-h-screen flex flex-col bg-cp-bg bg-cp-grid bg-[length:24px_24px] text-slate-200">
       {!isConnected ? (
-        <div className="border-b border-amber-200 bg-amber-50 px-4 py-2 text-[11px] text-amber-950 leading-snug">
-          <strong className="font-semibold">WS offline.</strong> Подключение к{" "}
-          <code className="rounded bg-amber-100/80 px-1">{wsUrl}</code>
+        <div className="border-b border-cp-amber/40 bg-cp-amber/5 px-4 py-2 text-[11px] text-cp-amber leading-snug shadow-[inset_0_-1px_0_rgba(255,184,0,0.2)]">
+          <strong className="font-semibold text-cp-yellow">WS offline.</strong> Подключение к{" "}
+          <code className="rounded-sm border border-cp-line bg-cp-panel px-1 text-cp-cyan">{wsUrl}</code>
           {isLocalWs ? (
             <>
               . Запустите бота на этой машине (из корня проекта:{" "}
-              <code className="rounded bg-amber-100/80 px-1">python -m backend.main</code> или ваш systemd) и
-              проверьте <code className="rounded bg-amber-100/80 px-1">WS_PORT=8765</code> в{" "}
-              <code className="rounded bg-amber-100/80 px-1">.env</code> бота.
+              <code className="rounded-sm border border-cp-line bg-cp-panel px-1 text-cp-cyan">
+                python -m backend.main
+              </code>{" "}
+              или ваш systemd) и проверьте{" "}
+              <code className="rounded-sm border border-cp-line bg-cp-panel px-1 text-cp-cyan">WS_PORT=8765</code> в{" "}
+              <code className="rounded-sm border border-cp-line bg-cp-panel px-1 text-cp-cyan">.env</code> бота.
             </>
           ) : (
             <>
-              . Бот на другом сервере — в <code className="rounded bg-amber-100/80 px-1">frontend/.env</code>{" "}
-              задайте <code className="rounded bg-amber-100/80 px-1">VITE_WS_URL=ws://IP:8765</code> и перезапустите{" "}
-              <code className="rounded bg-amber-100/80 px-1">npm run dev</code>; на VPS откройте порт 8765.
+              . Бот на другом сервере — в <code className="rounded-sm border border-cp-line bg-cp-panel px-1">frontend/.env</code>{" "}
+              задайте <code className="rounded-sm border border-cp-line bg-cp-panel px-1 text-cp-cyan">VITE_WS_URL=ws://IP:8765</code> и
+              перезапустите <code className="rounded-sm border border-cp-line bg-cp-panel px-1 text-cp-cyan">npm run dev</code>; на VPS откройте
+              порт 8765.
             </>
           )}
         </div>
       ) : null}
 
-      {/* Верх: управление + баланс */}
-      <header className="border-b border-slate-200 px-4 py-3 shrink-0 bg-slate-50">
+      <header className="border-b border-cp-line px-4 py-3 shrink-0 cp-panel">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-3">
-            <h1 className="text-sm font-semibold text-emerald-800 tracking-wide">EMA Scalper</h1>
+            <h1 className="text-sm font-bold tracking-[0.15em] uppercase text-cp-yellow cp-glow-text">EMA Scalper</h1>
             <span
-              className={`inline-flex items-center rounded border px-2.5 py-1 text-xs font-medium ${statusUi.className}`}
+              className={`inline-flex items-center rounded-sm border px-2.5 py-1 text-xs font-medium ${statusUi.className}`}
             >
               {statusUi.text}
             </span>
@@ -180,7 +206,7 @@ export default function App() {
                 type="button"
                 disabled={!isConnected || !isRunning}
                 onClick={() => sendMessage({ action: "pause" })}
-                className="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-800 shadow-sm hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
+                className="cp-btn-ghost"
               >
                 Пауза
               </button>
@@ -188,85 +214,100 @@ export default function App() {
                 type="button"
                 disabled={!isConnected || isRunning}
                 onClick={() => sendMessage({ action: "resume" })}
-                className="rounded border border-emerald-600 bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-40"
+                className="cp-btn-primary"
               >
                 Работает
               </button>
             </div>
           </div>
-          <div className="flex flex-wrap gap-6 text-xs font-mono text-slate-700">
+          <div className="flex flex-wrap gap-6 text-xs font-mono text-slate-300">
             <div>
-              <span className="text-slate-500">Маржа в открытых </span>
-              <span className="text-amber-800 font-medium">${openMargin.toFixed(2)}</span>
-              <span className="text-slate-500"> USDT</span>
+              <span className="text-cp-muted">Маржа в открытых </span>
+              <span className="text-cp-amber font-medium">${openMargin.toFixed(2)}</span>
+              <span className="text-cp-muted"> USDT</span>
             </div>
             <div>
-              <span className="text-slate-500">Нереализ. P&amp;L </span>
-              <span className={openUnrealized >= 0 ? "text-emerald-700" : "text-rose-600"}>
+              <span className="text-cp-muted">Нереализ. P&amp;L </span>
+              <span className={openUnrealized >= 0 ? "text-cp-green" : "text-cp-magenta"}>
                 ${openUnrealized.toFixed(4)}
               </span>
             </div>
-            <div className="text-slate-600">
+            <div className="text-slate-400">
               WS:{" "}
               {isConnected ? (
-                <span className="text-emerald-700 font-medium">online</span>
+                <span className="text-cp-cyan font-medium">online</span>
               ) : (
-                <span className="text-rose-600 font-medium">offline</span>
+                <span className="text-cp-magenta font-medium">offline</span>
               )}
             </div>
           </div>
         </div>
       </header>
 
-      {/* PnL за день */}
-      <section className="border-b border-slate-200 px-4 py-2 bg-white shrink-0">
+      <section className="border-b border-cp-line px-4 py-2 shrink-0 cp-panel">
         <div className="text-xs font-mono flex flex-wrap gap-6">
-          <span className="text-slate-500 uppercase text-[10px] tracking-wider">PnL за день (UTC)</span>
+          <span className="cp-hud-title">PnL за день (UTC)</span>
           <span>
             Сегодня:{" "}
-            <span className={todayPnl >= 0 ? "text-emerald-700" : "text-rose-600"}>${todayPnl.toFixed(4)}</span>
+            <span className={todayPnl >= 0 ? "text-cp-green" : "text-cp-magenta"}>${todayPnl.toFixed(4)}</span>
           </span>
-          <span className="text-slate-500">Сделок сегодня: {todayTrades}</span>
+          <span className="text-cp-muted">Сделок сегодня: {todayTrades}</span>
         </div>
       </section>
 
-      {/* Поиск входа в реальном времени */}
-      <section className="border-b border-slate-200 bg-white shrink-0">
-        <div className="px-3 py-1.5 text-[10px] uppercase tracking-wider text-slate-500 bg-slate-50 border-b border-slate-200">
-          Поиск входа (реальное время)
-        </div>
-        <div className="overflow-auto max-h-[140px]">
+      <section className="border-b border-cp-line shrink-0 cp-panel">
+        <div className="px-3 py-1.5 cp-hud-title border-b border-cp-line bg-cp-panel2/80">Поиск входа (реальное время)</div>
+        <div className="overflow-auto max-h-[160px]">
           {!entryWatchRows.length ? (
-            <p className="p-2 text-xs text-slate-500">Нет индикаторов: бот прогревается или WS не передал данные.</p>
+            <p className="p-2 text-xs text-cp-muted">Нет индикаторов: бот прогревается или WS не передал данные.</p>
           ) : (
             <table className="w-full text-[11px] font-mono">
-              <thead className="sticky top-0 bg-slate-100 text-slate-600 border-b border-slate-200">
+              <thead className="sticky top-0 cp-table-head">
                 <tr>
                   <th className="p-1.5 text-left font-normal">Пара</th>
                   <th className="p-1.5 text-left font-normal">Статус</th>
                   <th className="p-1.5 text-left font-normal">Причина</th>
-                  <th className="p-1.5 text-right font-normal">Score</th>
+                  <th className="p-1.5 text-right font-normal">Auto</th>
+                  <th className="p-1.5 text-right font-normal">Conf</th>
+                  <th className="p-1.5 text-center font-normal">OTE</th>
+                  <th className="p-1.5 text-center font-normal">OB</th>
                   <th className="p-1.5 text-right font-normal">Цена / EMA</th>
                 </tr>
               </thead>
               <tbody>
                 {entryWatchRows.map((r) => (
-                  <tr key={r.symbol} className="border-b border-slate-100">
-                    <td className="p-1.5">{r.symbol}</td>
+                  <tr key={r.symbol} className="border-b border-cp-border/80 hover:bg-cp-cyan/5">
+                    <td className="p-1.5 text-cp-cyan">{r.symbol}</td>
                     <td className="p-1.5">
                       {r.ready ? (
-                        <span className="text-emerald-700 font-medium">READY {r.side}</span>
+                        <span className="text-cp-green font-medium cp-glow-text">READY {r.side}</span>
                       ) : (
-                        <span className={r.allow ? "text-amber-700" : "text-slate-500"}>
+                        <span className={r.allow ? "text-cp-amber" : "text-cp-muted"}>
                           {r.allow ? "ожидание триггера" : "фильтр блокирует"}
                         </span>
                       )}
                     </td>
-                    <td className="p-1.5 text-slate-600 max-w-[240px] truncate" title={r.reason}>
+                    <td className="p-1.5 text-slate-400 max-w-[200px] truncate" title={r.reason}>
                       {r.reason}
                     </td>
-                    <td className="p-1.5 text-right">{Number.isFinite(r.score) ? r.score.toFixed(1) : "0.0"}</td>
-                    <td className="p-1.5 text-right text-slate-600">
+                    <td className="p-1.5 text-right text-slate-300">{Number.isFinite(r.score) ? r.score.toFixed(1) : "0.0"}</td>
+                    <td className="p-1.5 text-right text-slate-300">{r.conf !== null ? r.conf.toFixed(0) : "—"}</td>
+                    <td className="p-1.5 text-center text-[10px]">
+                      {r.oteL || r.oteS ? (
+                        <>
+                          {r.oteL ? <span className="text-cp-green">L</span> : null}
+                          {r.oteS ? <span className="text-cp-magenta ml-0.5">S</span> : null}
+                        </>
+                      ) : (
+                        <span className="text-cp-dim">—</span>
+                      )}
+                    </td>
+                    <td className="p-1.5 text-center text-[10px]">
+                      {r.obB ? <span className="text-cp-cyan">↑</span> : null}
+                      {r.obBe ? <span className="text-cp-magenta">↓</span> : null}
+                      {!r.obB && !r.obBe ? <span className="text-cp-dim">—</span> : null}
+                    </td>
+                    <td className="p-1.5 text-right text-slate-400">
                       {r.close.toFixed(3)} / {r.emaNow.toFixed(3)}
                     </td>
                   </tr>
@@ -277,43 +318,42 @@ export default function App() {
         </div>
       </section>
 
-      {/* Открытые | Зафиксированные */}
-      <section className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-2 gap-0 border-b border-slate-200">
-        <div className="border-b lg:border-b-0 lg:border-r border-slate-200 flex flex-col min-h-[220px] max-h-[42vh]">
-          <div className="px-3 py-1.5 text-[10px] uppercase tracking-wider text-slate-500 border-b border-slate-200 shrink-0 bg-slate-50">
-            Открытые позиции
-          </div>
+      <section className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-2 gap-0 border-b border-cp-line">
+        <div className="border-b lg:border-b-0 lg:border-r border-cp-line flex flex-col min-h-[220px] max-h-[42vh]">
+          <div className="px-3 py-1.5 cp-hud-title border-b border-cp-line shrink-0 bg-cp-panel2/80">Открытые позиции</div>
           <div className="overflow-auto flex-1 p-2 space-y-2">
             {!positions.length ? (
-              <p className="text-slate-500 text-xs p-2">Нет открытых EMA-позиций</p>
+              <p className="text-cp-muted text-xs p-2">Нет открытых EMA-позиций</p>
             ) : (
               positions.map((p, i) => (
                 <div
                   key={`${p.symbol}-${i}`}
-                  className="border border-slate-200 rounded p-2 bg-slate-50 text-[11px] font-mono shadow-sm"
+                  className="border border-cp-line rounded-sm cp-panel p-2 text-[11px] font-mono shadow-cp-glow"
                 >
                   <div className="flex justify-between gap-2">
-                    <span className="text-emerald-800 font-medium">{String(p.symbol ?? "")}</span>
-                    <span className={p.side === "LONG" ? "text-sky-700" : "text-orange-700"}>{p.side}</span>
+                    <span className="text-cp-yellow font-medium">{String(p.symbol ?? "")}</span>
+                    <span className={p.side === "LONG" ? "text-cp-cyan" : "text-cp-magenta"}>{p.side}</span>
                   </div>
-                  <div className="mt-1 grid grid-cols-2 gap-x-3 gap-y-0.5 text-slate-600">
+                  <div className="mt-1 grid grid-cols-2 gap-x-3 gap-y-0.5 text-slate-400">
                     <span>Вход</span>
-                    <span className="text-right text-slate-900">{Number(p.entry_price ?? 0).toFixed(2)}</span>
+                    <span className="text-right text-slate-200">{Number(p.entry_price ?? 0).toFixed(2)}</span>
                     <span>Сейчас</span>
-                    <span className="text-right text-slate-900">{Number(p.current_price ?? 0).toFixed(2)}</span>
+                    <span className="text-right text-slate-200">{Number(p.current_price ?? 0).toFixed(2)}</span>
                     <span>Маржа</span>
-                    <span className="text-right text-amber-800">${Number(p.size_usdt ?? 0).toFixed(2)}</span>
+                    <span className="text-right text-cp-amber">${Number(p.size_usdt ?? 0).toFixed(2)}</span>
                     <span>С плечом</span>
-                    <span className="text-right">${Number(p.notional_usdt ?? 0).toFixed(2)} ×{p.leverage ?? 1}</span>
+                    <span className="text-right text-slate-300">
+                      ${Number(p.notional_usdt ?? 0).toFixed(2)} ×{p.leverage ?? 1}
+                    </span>
                     <span>P&amp;L нер.</span>
                     <span
-                      className={`text-right ${Number(p.pnl_usdt ?? 0) >= 0 ? "text-emerald-700" : "text-rose-600"}`}
+                      className={`text-right ${Number(p.pnl_usdt ?? 0) >= 0 ? "text-cp-green" : "text-cp-magenta"}`}
                     >
                       ${Number(p.pnl_usdt ?? 0).toFixed(4)}
                     </span>
                   </div>
                   {p.entry_reason ? (
-                    <div className="mt-1 text-[10px] text-slate-500 truncate" title={String(p.entry_reason)}>
+                    <div className="mt-1 text-[10px] text-cp-muted truncate" title={String(p.entry_reason)}>
                       Вход: {String(p.entry_reason)}
                     </div>
                   ) : null}
@@ -324,12 +364,12 @@ export default function App() {
         </div>
 
         <div className="flex flex-col min-h-[220px] max-h-[42vh]">
-          <div className="px-3 py-1.5 text-[10px] uppercase tracking-wider text-slate-500 border-b border-slate-200 shrink-0 bg-slate-50">
+          <div className="px-3 py-1.5 cp-hud-title border-b border-cp-line shrink-0 bg-cp-panel2/80">
             Зафиксировано {closedToday.length ? `(сегодня UTC ${todayUtc})` : "(последние в ленте)"}
           </div>
           <div className="overflow-auto flex-1 p-2 space-y-2">
             {!fixedList.length ? (
-              <p className="text-slate-500 text-xs p-2">Нет закрытых сделок в выборке</p>
+              <p className="text-cp-muted text-xs p-2">Нет закрытых сделок в выборке</p>
             ) : (
               fixedList.map((t) => {
                 const { d, t: tm } = fmtDt(t.timestamp_close);
@@ -337,16 +377,16 @@ export default function App() {
                 return (
                   <div
                     key={String(t.id)}
-                    className="border border-slate-200 rounded p-2 bg-white text-[11px] font-mono shadow-sm"
+                    className="border border-cp-line rounded-sm cp-panel p-2 text-[11px] font-mono"
                   >
                     <div className="flex justify-between">
-                      <span className="text-slate-800">{String(t.symbol ?? "")}</span>
-                      <span className={pnl >= 0 ? "text-emerald-700" : "text-rose-600"}>${pnl.toFixed(4)}</span>
+                      <span className="text-slate-200">{String(t.symbol ?? "")}</span>
+                      <span className={pnl >= 0 ? "text-cp-green" : "text-cp-magenta"}>${pnl.toFixed(4)}</span>
                     </div>
-                    <div className="text-[10px] text-slate-500 mt-0.5">
+                    <div className="text-[10px] text-cp-muted mt-0.5">
                       {d} {tm}
                     </div>
-                    <div className="mt-1 text-[10px] text-slate-500">
+                    <div className="mt-1 text-[10px] text-cp-muted">
                       {String(t.close_reason ?? "")} · маржа ${Number(t.size_usdt ?? 0).toFixed(2)}
                     </div>
                   </div>
@@ -357,19 +397,18 @@ export default function App() {
         </div>
       </section>
 
-      {/* История — полная таблица */}
-      <section className="flex flex-col min-h-[280px] flex-1 border-t border-slate-200">
-        <div className="flex flex-wrap items-center gap-2 px-3 py-1.5 border-b border-slate-200 bg-slate-50 shrink-0">
-          <span className="text-[10px] uppercase tracking-wider text-slate-500">История сделок</span>
+      <section className="flex flex-col min-h-[280px] flex-1 border-t border-cp-line">
+        <div className="flex flex-wrap items-center gap-2 px-3 py-1.5 border-b border-cp-line shrink-0 cp-panel">
+          <span className="cp-hud-title">История сделок</span>
           <input
             type="date"
-            className="bg-white border border-slate-300 rounded px-1 py-0.5 text-[11px]"
+            className="bg-cp-panel2 border border-cp-line rounded-sm px-1 py-0.5 text-[11px] text-slate-200 focus:border-cp-cyan focus:outline-none"
             value={dayPick}
             onChange={(e) => setDayPick(e.target.value)}
           />
           <button
             type="button"
-            className="text-[11px] px-2 py-0.5 rounded border border-emerald-600 bg-emerald-600 text-white hover:bg-emerald-700"
+            className="text-[11px] px-2 py-0.5 rounded-sm border border-cp-yellow/70 bg-cp-yellow/10 text-cp-yellow hover:bg-cp-yellow/20"
             onClick={loadDayHistory}
           >
             Загрузить день из БД
@@ -377,19 +416,19 @@ export default function App() {
           {historyMode === "day" ? (
             <button
               type="button"
-              className="text-[11px] px-2 py-0.5 rounded border border-slate-300 bg-white hover:bg-slate-100"
+              className="text-[11px] px-2 py-0.5 rounded-sm border border-cp-line bg-cp-panel2 text-slate-300 hover:border-cp-cyan/40"
               onClick={backToFeedHistory}
             >
               Лента с сервера
             </button>
           ) : null}
           {historyMode === "day" && emaTradeByDay?.error ? (
-            <span className="text-rose-600 text-[11px]">{emaTradeByDay.error}</span>
+            <span className="text-cp-magenta text-[11px]">{emaTradeByDay.error}</span>
           ) : null}
         </div>
-        <div className="overflow-auto flex-1 bg-white">
+        <div className="overflow-auto flex-1 bg-cp-bg">
           <table className="w-full text-left text-[11px] font-mono border-collapse">
-            <thead className="sticky top-0 bg-slate-100 text-slate-600 border-b border-slate-200">
+            <thead className="sticky top-0 cp-table-head">
               <tr>
                 <th className="p-1.5 font-normal">Дата</th>
                 <th className="p-1.5 font-normal">Время UTC</th>
@@ -410,21 +449,21 @@ export default function App() {
                 const n = notionWithLev(t);
                 const lev = Math.max(1, Number(t.leverage ?? 1));
                 return (
-                  <tr key={String(t.id)} className="border-b border-slate-100 hover:bg-slate-50">
-                    <td className="p-1.5 text-slate-600">{d}</td>
-                    <td className="p-1.5 text-slate-600">{tm}</td>
-                    <td className="p-1.5">{String(t.symbol ?? "")}</td>
-                    <td className="p-1.5 text-right">{Number(t.entry_price ?? 0).toFixed(4)}</td>
-                    <td className="p-1.5 text-right">{Number(t.exit_price ?? 0).toFixed(4)}</td>
-                    <td className="p-1.5 text-right text-amber-800">${Number(t.size_usdt ?? 0).toFixed(2)}</td>
-                    <td className="p-1.5 text-right text-slate-800">
-                      ${n.toFixed(2)} <span className="text-slate-500">×{lev}</span>
+                  <tr key={String(t.id)} className="border-b border-cp-border/60 hover:bg-cp-cyan/5">
+                    <td className="p-1.5 text-cp-muted">{d}</td>
+                    <td className="p-1.5 text-cp-muted">{tm}</td>
+                    <td className="p-1.5 text-cp-cyan">{String(t.symbol ?? "")}</td>
+                    <td className="p-1.5 text-right text-slate-300">{Number(t.entry_price ?? 0).toFixed(4)}</td>
+                    <td className="p-1.5 text-right text-slate-300">{Number(t.exit_price ?? 0).toFixed(4)}</td>
+                    <td className="p-1.5 text-right text-cp-amber">${Number(t.size_usdt ?? 0).toFixed(2)}</td>
+                    <td className="p-1.5 text-right text-slate-300">
+                      ${n.toFixed(2)} <span className="text-cp-muted">×{lev}</span>
                     </td>
-                    <td className="p-1.5 text-slate-700 max-w-[140px] truncate" title={String(t.entry_reason ?? "")}>
+                    <td className="p-1.5 text-slate-400 max-w-[140px] truncate" title={String(t.entry_reason ?? "")}>
                       {String(t.entry_reason ?? "—")}
                     </td>
-                    <td className="p-1.5 text-slate-700">{String(t.close_reason ?? "—")}</td>
-                    <td className={`p-1.5 text-right ${pnl >= 0 ? "text-emerald-700" : "text-rose-600"}`}>
+                    <td className="p-1.5 text-slate-400">{String(t.close_reason ?? "—")}</td>
+                    <td className={`p-1.5 text-right ${pnl >= 0 ? "text-cp-green" : "text-cp-magenta"}`}>
                       {pnl.toFixed(4)}
                     </td>
                   </tr>
@@ -433,7 +472,7 @@ export default function App() {
             </tbody>
           </table>
           {!historyRows.length ? (
-            <p className="p-4 text-slate-500 text-xs">Нет строк. Подключите бота или загрузите день из БД.</p>
+            <p className="p-4 text-cp-muted text-xs">Нет строк. Подключите бота или загрузите день из БД.</p>
           ) : null}
         </div>
       </section>

@@ -364,3 +364,148 @@ def get_indicators(candles: list[dict[str, Any]], entry_cfg: dict[str, Any]) -> 
     result.update(macd)
     result.update(momentum)
     return result
+
+
+def calc_ote_zone(candles: list[dict[str, Any]], swing_lookback: int = 20) -> dict[str, Any]:
+    """
+    Последний swing high / swing low на окне lookback.
+    OTE (61.8%–78.6% коррекции): лонг — откат от swing high к low; шорт — откат от swing low к high.
+    """
+    if not candles or swing_lookback < 2:
+        return {}
+    sl = min(swing_lookback, len(candles))
+    highs = [float(c["high"]) for c in candles[-sl:]]
+    lows = [float(c["low"]) for c in candles[-sl:]]
+    swing_high = max(highs)
+    swing_low = min(lows)
+    rang = swing_high - swing_low
+    current = float(candles[-1]["close"])
+    if rang <= 1e-12:
+        return {
+            "swing_high": swing_high,
+            "swing_low": swing_low,
+            "ote_long_top": current,
+            "ote_long_bottom": current,
+            "ote_short_top": current,
+            "ote_short_bottom": current,
+            "in_ote_long": False,
+            "in_ote_short": False,
+        }
+    ote_long_top = swing_high - rang * 0.618
+    ote_long_bottom = swing_high - rang * 0.786
+    ote_short_bottom = swing_low + rang * 0.618
+    ote_short_top = swing_low + rang * 0.786
+    in_ote_long = ote_long_bottom <= current <= ote_long_top
+    in_ote_short = ote_short_bottom <= current <= ote_short_top
+    return {
+        "swing_high": swing_high,
+        "swing_low": swing_low,
+        "ote_long_top": ote_long_top,
+        "ote_long_bottom": ote_long_bottom,
+        "ote_short_top": ote_short_top,
+        "ote_short_bottom": ote_short_bottom,
+        "in_ote_long": in_ote_long,
+        "in_ote_short": in_ote_short,
+    }
+
+
+def detect_order_block(
+    candles: list[dict[str, Any]],
+    ob_lookback: int = 15,
+    atr_period: int = 14,
+    impulse_mult: float = 1.5,
+) -> dict[str, Any]:
+    """
+    Order Block: последняя свеча противоположного цвета перед импульсом.
+    Импульс: тело следующей свечи > ATR * impulse_mult (ATR с того же ряда).
+    """
+    n = len(candles)
+    if n < max(atr_period + 2, ob_lookback + 3, 5):
+        return {
+            "bullish_ob": None,
+            "bearish_ob": None,
+            "price_in_bullish_ob": False,
+            "price_in_bearish_ob": False,
+        }
+    atr = calc_atr(candles, atr_period)
+    thr = max(atr * impulse_mult, float(candles[-1]["close"]) * 1e-6)
+
+    bullish_ob = None
+    bearish_ob = None
+    lo = max(0, n - ob_lookback)
+
+    for i in range(n - 3, lo - 1, -1):
+        c = candles[i]
+        c_next = candles[i + 1]
+        o, cl = float(c["open"]), float(c["close"])
+        on, cln = float(c_next["open"]), float(c_next["close"])
+        body_next = abs(cln - on)
+        if cl < o and cln > on and body_next > thr:
+            bullish_ob = {"top": o, "bottom": cl, "index": i}
+            break
+
+    for i in range(n - 3, lo - 1, -1):
+        c = candles[i]
+        c_next = candles[i + 1]
+        o, cl = float(c["open"]), float(c["close"])
+        on, cln = float(c_next["open"]), float(c_next["close"])
+        body_next = abs(cln - on)
+        if cl > o and cln < on and body_next > thr:
+            bearish_ob = {"top": cl, "bottom": o, "index": i}
+            break
+
+    current = float(candles[-1]["close"])
+    price_in_bullish_ob = bool(
+        bullish_ob and bullish_ob["bottom"] <= current <= bullish_ob["top"]
+    )
+    price_in_bearish_ob = bool(
+        bearish_ob and bearish_ob["bottom"] <= current <= bearish_ob["top"]
+    )
+    return {
+        "bullish_ob": bullish_ob,
+        "bearish_ob": bearish_ob,
+        "price_in_bullish_ob": price_in_bullish_ob,
+        "price_in_bearish_ob": price_in_bearish_ob,
+    }
+
+
+def enrich_indicators_htf_ote_ob(
+    ind: dict[str, Any],
+    candles_htf: list[dict[str, Any]] | None,
+    entry_cfg: dict[str, Any],
+) -> None:
+    """Добавляет в ind поля OTE / OB по закрытым свечам старшего ТФ (например 15m)."""
+    swing_lb = int(entry_cfg.get("ote_swing_lookback", 20))
+    ob_lb = int(entry_cfg.get("ob_lookback", 15))
+    atr_p = int(entry_cfg.get("atr_period", 14))
+    impulse_mult = float(entry_cfg.get("ob_impulse_atr_mult", 1.5))
+    need = max(swing_lb + 1, atr_p + 3, ob_lb + 4, 10)
+    if not candles_htf or len(candles_htf) < need:
+        ind["ote_ob_unavailable"] = True
+        ind["ote_swing_high"] = None
+        ind["ote_swing_low"] = None
+        ind["in_ote_long"] = False
+        ind["in_ote_short"] = False
+        ind["price_in_bullish_ob"] = False
+        ind["price_in_bearish_ob"] = False
+        ind["bullish_ob"] = None
+        ind["bearish_ob"] = None
+        return
+
+    ind["ote_ob_unavailable"] = False
+    ote = calc_ote_zone(candles_htf, swing_lookback=swing_lb)
+    ob = detect_order_block(candles_htf, ob_lookback=ob_lb, atr_period=atr_p, impulse_mult=impulse_mult)
+
+    ind["ote_swing_high"] = ote.get("swing_high")
+    ind["ote_swing_low"] = ote.get("swing_low")
+    ind["ote_long_top"] = ote.get("ote_long_top")
+    ind["ote_long_bottom"] = ote.get("ote_long_bottom")
+    ind["ote_short_top"] = ote.get("ote_short_top")
+    ind["ote_short_bottom"] = ote.get("ote_short_bottom")
+    ind["in_ote_long"] = bool(ote.get("in_ote_long"))
+    ind["in_ote_short"] = bool(ote.get("in_ote_short"))
+
+    ind["bullish_ob"] = ob.get("bullish_ob")
+    ind["bearish_ob"] = ob.get("bearish_ob")
+    ind["price_in_bullish_ob"] = bool(ob.get("price_in_bullish_ob"))
+    ind["price_in_bearish_ob"] = bool(ob.get("price_in_bearish_ob"))

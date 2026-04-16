@@ -2,7 +2,74 @@
 @tailwind components;
 @tailwind utilities;
 
-body {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
-  font-size: 13px;
+@layer base {
+  :root {
+    --cp-yellow: #fcee0a;
+    --cp-cyan: #00e5ff;
+    --cp-bg: #050608;
+  }
+
+  html {
+    @apply antialiased;
+  }
+
+  body {
+    @apply min-h-screen bg-cp-void text-slate-200 font-mono text-[13px];
+    background-image: radial-gradient(ellipse 120% 80% at 50% -20%, rgba(0, 229, 255, 0.08), transparent 50%),
+      radial-gradient(ellipse 80% 50% at 100% 50%, rgba(252, 238, 10, 0.04), transparent 45%);
+  }
+
+  #root {
+    @apply relative z-10 min-h-screen isolate;
+  }
+
+  /* Сканлайны под UI */
+  body::before {
+    content: "";
+    pointer-events: none;
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    opacity: 0.28;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(0, 0, 0, 0.25) 2px,
+      rgba(0, 0, 0, 0.25) 3px
+    );
+    mix-blend-mode: multiply;
+  }
+}
+
+@layer components {
+  .cp-hud-title {
+    @apply text-[10px] uppercase tracking-[0.2em] text-cp-cyan font-semibold;
+    text-shadow: 0 0 12px rgba(0, 229, 255, 0.35);
+  }
+
+  .cp-panel {
+    @apply border border-cp-border bg-cp-panel/95 shadow-cp-inset backdrop-blur-sm;
+    box-shadow: 0 0 0 1px rgba(0, 229, 255, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  }
+
+  .cp-btn {
+    @apply rounded-sm border px-3 py-1.5 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40;
+  }
+
+  .cp-btn-ghost {
+    @apply cp-btn border-cp-line bg-cp-panel2 text-slate-200 hover:border-cp-cyan/50 hover:text-cp-cyan hover:shadow-cp-glow;
+  }
+
+  .cp-btn-primary {
+    @apply cp-btn border-cp-yellow/80 bg-cp-yellow/10 text-cp-yellow hover:bg-cp-yellow/20 shadow-cp-yellow;
+  }
+
+  .cp-table-head {
+    @apply bg-cp-panel2 text-cp-muted text-[10px] uppercase tracking-wider border-b border-cp-line;
+  }
+
+  .cp-glow-text {
+    text-shadow: 0 0 8px currentColor;
+  }
 }

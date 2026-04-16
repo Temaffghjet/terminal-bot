@@ -60,6 +60,13 @@ ema_scalper:
     vwap_max_distance_pct: 2.0
     cooldown_candles: 1
     higher_tf: "15m"
+    # OTE (Fib 61.8–78.6%) и Order Block по закрытым свечам higher_tf; при false — как раньше
+    ob_filter_enabled: false
+    ote_filter_enabled: false
+    ote_swing_lookback: 20
+    ob_lookback: 15
+    ob_impulse_atr_mult: 1.5
+    min_confidence_score: 60
     atr_period: 14
     rsi_period: 14
     rsi_long_max: 65

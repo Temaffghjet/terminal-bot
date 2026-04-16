@@ -32,7 +32,7 @@ from backend.strategy.breakout import (
     BreakoutPositionTracker,
     BreakoutSignalEngine,
 )
-from backend.strategy.ema_scalper import EMAScalpPosition, EMAScalpSignalEngine, get_indicators
+from backend.strategy.ema_scalper import EMAScalpPosition, EMAScalpSignalEngine, enrich_indicators_htf_ote_ob, get_indicators
 from backend.strategy.ema_scalper.indicators import calc_ema, compute_higher_tf_trend_from_ohlcv
 from backend.strategy.micro_signals import MicroSignalEngine
 from backend.strategy.position_manager import LegState, PairPosition, PositionManager, ScalpPosition
@@ -464,6 +464,41 @@ RT = BotRuntime()
 
 # Кэш тренда старшего ТФ (15m): symbol|tf → (ts, данные), TTL 60 с — не дёргать биржу каждые 10 с
 _ema_higher_tf_cache: dict[str, tuple[float, dict | None]] = {}
+# Закрытые свечи старшего ТФ для OTE / Order Block (кэш TTL, отдельно от тренда)
+_ema_htf_ote_ohlcv_cache: dict[str, tuple[float, list | None]] = {}
+
+
+async def _ema_htf_closed_candles_cached(
+    ex: object,
+    symbol: str,
+    tf: str,
+    limit: int = 80,
+    ttl_sec: float = 60.0,
+) -> list[dict] | None:
+    """Закрытые OHLCV для OTE/OB; формирующая свеча отбрасывается (как в compute_higher_tf_trend)."""
+    now = time.time()
+    key = f"{symbol}|{tf}|ote|{limit}"
+    if key in _ema_htf_ote_ohlcv_cache:
+        ts, data = _ema_htf_ote_ohlcv_cache[key]
+        if now - ts < ttl_sec:
+            return data
+    try:
+        raw = await asyncio.wait_for(
+            asyncio.to_thread(ex.fetch_ohlcv, symbol, tf, None, limit + 1),  # type: ignore[attr-defined]
+            timeout=75.0,
+        )
+    except (asyncio.TimeoutError, Exception) as e:
+        logger.warning("EMA HTF OHLCV OTE/OB %s %s: %s", symbol, tf, e)
+        return None
+    if not raw or len(raw) < 3:
+        return None
+    closed = raw[:-1]
+    candles = [
+        {"ts": int(x[0]), "open": float(x[1]), "high": float(x[2]), "low": float(x[3]), "close": float(x[4]), "volume": float(x[5])}
+        for x in closed
+    ]
+    _ema_htf_ote_ohlcv_cache[key] = (now, candles)
+    return candles
 
 
 async def _ema_higher_tf_trend_cached(
@@ -1643,10 +1678,19 @@ async def ema_scalper_bot_loop() -> None:
                         ema_period = int(ent_cfg.get("ema_period", 9))
                         ind = get_indicators(candles, {**ent_cfg, "ema_period": ema_period, "volume_lookback": ent_cfg.get("volume_lookback", 10)})
                         if not ind.get("warming_up"):
-                            ht_detail = await _ema_higher_tf_trend_cached(ex, sym, str(ent_cfg.get("higher_tf", "15m")), ttl_sec=60.0)
+                            htf_tf = str(ent_cfg.get("higher_tf", "15m"))
+                            ht_detail = await _ema_higher_tf_trend_cached(ex, sym, htf_tf, ttl_sec=60.0)
                             ind["higher_tf_trend"] = (ht_detail or {}).get("trend")
                             ind["higher_tf_trend_detail"] = ht_detail
                             ind["higher_tf_volume_ratio"] = float((ht_detail or {}).get("volume_ratio") or 0.0)
+                            if bool(ent_cfg.get("ob_filter_enabled")) or bool(ent_cfg.get("ote_filter_enabled")):
+                                ote_lb = int(ent_cfg.get("ote_swing_lookback", 20))
+                                ob_lb = int(ent_cfg.get("ob_lookback", 15))
+                                atr_p = int(ent_cfg.get("atr_period", 14))
+                                need_bars = max(ote_lb + 2, ob_lb + 5, atr_p + 5, 40)
+                                htf_limit = max(80, need_bars)
+                                htf_candles = await _ema_htf_closed_candles_cached(ex, sym, htf_tf, limit=htf_limit, ttl_sec=60.0)
+                                enrich_indicators_htf_ote_ob(ind, htf_candles, ent_cfg)
                         auto_profile = (
                             _ema_auto_trade_profile(ind, dep, rk_es, pair_exit_cfg, {**auto_cfg, "min_score_to_trade": dyn_min_score}, lev, pos_pct, dry_es)
                             if (auto_enabled and not ind.get("warming_up"))

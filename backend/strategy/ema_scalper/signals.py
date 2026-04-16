@@ -50,6 +50,33 @@ class EMAScalpSignalEngine:
         self.momentum_mode = str(ent.get("momentum_mode", "strict")).strip().lower()
         # 0 = выкл.; иначе не входить, если цена слишком далеко от EMA на 5m (% от цены)
         self.entry_max_dist_ema_pct = float(ent.get("entry_max_distance_from_ema_pct", 0) or 0)
+        # OTE / Order Block (старший ТФ, см. enrich_indicators_htf_ote_ob в main)
+        self.ob_filter_enabled = bool(ent.get("ob_filter_enabled", False))
+        self.ote_filter_enabled = bool(ent.get("ote_filter_enabled", False))
+        self.min_confidence_score = float(ent.get("min_confidence_score", 60))
+
+    def _confluence_eval(self, side: str, ind: dict[str, Any]) -> tuple[bool, str]:
+        """Бонус к уверенности: база 40 + OB + OTE + RSI; порог min_confidence_score."""
+        if not self.ob_filter_enabled and not self.ote_filter_enabled:
+            return True, ""
+        if ind.get("ote_ob_unavailable"):
+            return False, "ote_ob_unavailable"
+        ob_ok = bool(ind.get("price_in_bullish_ob")) if side == "LONG" else bool(ind.get("price_in_bearish_ob"))
+        ote_ok = bool(ind.get("in_ote_long")) if side == "LONG" else bool(ind.get("in_ote_short"))
+        score = 40
+        if self.ob_filter_enabled and ob_ok:
+            score += 30
+        if self.ote_filter_enabled and ote_ok:
+            score += 20
+        rsi = float(ind.get("rsi", 50.0))
+        if side == "LONG" and rsi < 50:
+            score += 10
+        if side == "SHORT" and rsi > 50:
+            score += 10
+        ind["entry_confidence_score"] = float(score)
+        if score < self.min_confidence_score:
+            return False, f"low_confidence_{score}"
+        return True, ""
 
     def _momentum_long_ok(self, ind: dict[str, Any]) -> bool:
         if self.momentum_mode in ("off", "false", "0", "none"):
@@ -174,6 +201,9 @@ class EMAScalpSignalEngine:
                 return {"action": "HOLD", "reason": "rsi_overbought", "indicators": ind}
             if body_pct < self.min_candle_body_pct:
                 return {"action": "HOLD", "reason": "doji_candle", "indicators": ind}
+            ok_c, reason_c = self._confluence_eval("LONG", ind)
+            if not ok_c:
+                return {"action": "HOLD", "reason": reason_c, "indicators": ind}
             return {"action": "OPEN_LONG", "reason": "ema_long", "indicators": ind}
 
         if short_setup:
@@ -188,6 +218,9 @@ class EMAScalpSignalEngine:
                 return {"action": "HOLD", "reason": "rsi_oversold", "indicators": ind}
             if body_pct < self.min_candle_body_pct:
                 return {"action": "HOLD", "reason": "doji_candle", "indicators": ind}
+            ok_c, reason_c = self._confluence_eval("SHORT", ind)
+            if not ok_c:
+                return {"action": "HOLD", "reason": reason_c, "indicators": ind}
             return {"action": "OPEN_SHORT", "reason": "ema_short", "indicators": ind}
 
         return {"action": "HOLD", "reason": "no_setup", "indicators": ind}
@@ -309,6 +342,9 @@ class EMAScalpSignalEngine:
                 return {"signal_ready": False, "side_ready": None, "reason": "rsi_overbought"}
             if body_pct < self.min_candle_body_pct:
                 return {"signal_ready": False, "side_ready": None, "reason": "doji_candle"}
+            ok_c, reason_c = self._confluence_eval("LONG", ind)
+            if not ok_c:
+                return {"signal_ready": False, "side_ready": None, "reason": reason_c}
             return {"signal_ready": True, "side_ready": "LONG", "reason": "long_setup"}
 
         if short_setup:
@@ -323,6 +359,9 @@ class EMAScalpSignalEngine:
                 return {"signal_ready": False, "side_ready": None, "reason": "rsi_oversold"}
             if body_pct < self.min_candle_body_pct:
                 return {"signal_ready": False, "side_ready": None, "reason": "doji_candle"}
+            ok_c, reason_c = self._confluence_eval("SHORT", ind)
+            if not ok_c:
+                return {"signal_ready": False, "side_ready": None, "reason": reason_c}
             return {"signal_ready": True, "side_ready": "SHORT", "reason": "short_setup"}
 
         return {"signal_ready": False, "side_ready": None, "reason": "no_setup"}
