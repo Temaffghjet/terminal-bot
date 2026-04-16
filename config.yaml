@@ -49,16 +49,16 @@ ema_scalper:
     min_candles_above_below: 3
     max_candles_above_below: 8
     momentum_mode: loose
-    entry_max_distance_from_ema_pct: 0.4
+    entry_max_distance_from_ema_pct: 1.5
     min_candle_body_pct: 0.05
-    no_trade_hours_utc: [2, 3, 4]
-    min_volume_usdt: 1000000
-    adx_filter_enabled: true
+    no_trade_hours_utc: []
+    min_volume_usdt: 0
+    adx_filter_enabled: false
     adx_period: 14
     adx_threshold: 20
     vwap_lookback: 20
-    vwap_max_distance_pct: 0.9
-    cooldown_candles: 4
+    vwap_max_distance_pct: 2.0
+    cooldown_candles: 1
     higher_tf: "15m"
     atr_period: 14
     rsi_period: 14
@@ -82,8 +82,8 @@ ema_scalper:
     use_limit_orders: true
   auto:
     enabled: true
-    min_score_to_trade: 62
-    top_n_candidates: 2
+    min_score_to_trade: 45
+    top_n_candidates: 1
     min_budget_factor: 0.35
     max_budget_factor: 1.0
     min_position_pct: 12
