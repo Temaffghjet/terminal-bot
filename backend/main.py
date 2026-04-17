@@ -1885,12 +1885,13 @@ def _parse_ccxt_position_row(p: dict) -> dict | None:
 
 
 def _fetch_positions_sync(ex: object, env: dict) -> list:
-    """Hyperliquid: ccxt требует user в params, если кошелёк не подставился в опциях."""
+    """Hyperliquid: без адреса кошелька ccxt не умеет fetch_positions — не вызываем (тишина в логах). С адресом — params.user."""
     ex_id = str(getattr(ex, "id", "") or "")
     if ex_id == "hyperliquid":
         w = (env.get("HYPERLIQUID_WALLET_ADDRESS") or "").strip()
-        if w:
-            return list(ex.fetch_positions(params={"user": w}))  # type: ignore[union-attr]
+        if not w:
+            return []
+        return list(ex.fetch_positions(params={"user": w}))  # type: ignore[union-attr]
     return list(ex.fetch_positions())  # type: ignore[union-attr]
 
 
