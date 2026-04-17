@@ -1,6 +1,8 @@
 # ═══════════════════════════════════════════════
 # EMA Scalper — Hyperliquid 5m (смягчённые фильтры + явные ключи)
-# Секреты: HYPERLIQUID_* в .env (для fetch_positions и live)
+# HYPERLIQUID_WALLET_ADDRESS в .env можно держать заполненным: так уходит ворнинг
+# fetch_positions. Симуляция ордеров задаётся только ema_scalper.dry_run / bot.dry_run ниже,
+# а не «пустым» кошельком.
 # ═══════════════════════════════════════════════
 
 exchange:
@@ -34,6 +36,7 @@ ema_scalper:
   enabled: true
   exchange: hyperliquid
   testnet: false
+  # true = входы/выходы только в симуляции (ордера на HL не отправляются), даже если в .env есть адрес
   dry_run: true
 
   pairs:
