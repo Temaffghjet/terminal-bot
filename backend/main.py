@@ -1884,9 +1884,19 @@ def _parse_ccxt_position_row(p: dict) -> dict | None:
     }
 
 
+def _fetch_positions_sync(ex: object, env: dict) -> list:
+    """Hyperliquid: ccxt требует user в params, если кошелёк не подставился в опциях."""
+    ex_id = str(getattr(ex, "id", "") or "")
+    if ex_id == "hyperliquid":
+        w = (env.get("HYPERLIQUID_WALLET_ADDRESS") or "").strip()
+        if w:
+            return list(ex.fetch_positions(params={"user": w}))  # type: ignore[union-attr]
+    return list(ex.fetch_positions())  # type: ignore[union-attr]
+
+
 async def sync_positions_on_startup() -> None:
     """
-    §13.5: восстановить EMA / Breakout из открытых позиций биржи.
+    Восстановить EMA / Breakout из открытых позиций биржи.
     Stat-arb пары — только предупреждение по одной ноге.
     """
     cfg = RT.config
@@ -1908,7 +1918,7 @@ async def sync_positions_on_startup() -> None:
             return
         seen_ex.add(id(ex))
         try:
-            rows = await asyncio.to_thread(ex.fetch_positions)  # type: ignore[attr-defined]
+            rows = await asyncio.to_thread(_fetch_positions_sync, ex, RT.env)
             if rows:
                 all_rows.extend(rows)
         except Exception as e:
