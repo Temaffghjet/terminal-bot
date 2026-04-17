@@ -54,6 +54,8 @@ ema_scalper:
     min_candles_above_below: 3
     max_candles_above_below: 8
     higher_tf: "15m"
+    # При FLAT на 15m иначе входов нет; true = разрешить сделки по 5m без UP/DOWN на старшем ТФ (риск выше)
+    allow_trading_when_higher_tf_flat: true
     min_candle_body_pct: 0.05
     no_trade_hours_utc: [2, 3, 4]
     min_volume_usdt: 1000000

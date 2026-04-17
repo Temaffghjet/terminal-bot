@@ -54,6 +54,18 @@ class EMAScalpSignalEngine:
         self.ob_filter_enabled = bool(ent.get("ob_filter_enabled", False))
         self.ote_filter_enabled = bool(ent.get("ote_filter_enabled", False))
         self.min_confidence_score = float(ent.get("min_confidence_score", 60))
+        # Если true: при higher_tf_trend == FLAT всё равно смотреть только 5m-сетап (лонг/шорт по своим правилам)
+        self.allow_trading_when_higher_tf_flat = bool(ent.get("allow_trading_when_higher_tf_flat", False))
+
+    def _ht_allows_long(self, ht: Any) -> bool:
+        if ht == "UP":
+            return True
+        return bool(self.allow_trading_when_higher_tf_flat and ht == "FLAT")
+
+    def _ht_allows_short(self, ht: Any) -> bool:
+        if ht == "DOWN":
+            return True
+        return bool(self.allow_trading_when_higher_tf_flat and ht == "FLAT")
 
     def _confluence_eval(self, side: str, ind: dict[str, Any]) -> tuple[bool, str]:
         """Бонус к уверенности: база 40 + OB + OTE + RSI; порог min_confidence_score."""
@@ -127,7 +139,7 @@ class EMAScalpSignalEngine:
         ht = ind.get("higher_tf_trend")
         if ht is None:
             return {"action": "HOLD", "reason": "higher_tf_unavailable", "indicators": ind}
-        if ht == "FLAT":
+        if ht == "FLAT" and not self.allow_trading_when_higher_tf_flat:
             return {"action": "HOLD", "reason": "higher_tf_flat", "indicators": ind}
         if open_count >= self.max_open:
             return {"action": "HOLD", "reason": "max_positions", "indicators": ind}
@@ -190,7 +202,7 @@ class EMAScalpSignalEngine:
         )
 
         if long_setup:
-            if ht != "UP":
+            if not self._ht_allows_long(ht):
                 return {"action": "HOLD", "reason": "against_higher_tf", "indicators": ind}
             if self.macd_enabled:
                 if not (macd > macd_signal and macd_hist > 0):
@@ -207,7 +219,7 @@ class EMAScalpSignalEngine:
             return {"action": "OPEN_LONG", "reason": "ema_long", "indicators": ind}
 
         if short_setup:
-            if ht != "DOWN":
+            if not self._ht_allows_short(ht):
                 return {"action": "HOLD", "reason": "against_higher_tf", "indicators": ind}
             if self.macd_enabled:
                 if not (macd < macd_signal and macd_hist < 0):
@@ -266,7 +278,7 @@ class EMAScalpSignalEngine:
         ht = ind.get("higher_tf_trend")
         if ht is None:
             return {"signal_ready": False, "side_ready": None, "reason": "higher_tf_unavailable"}
-        if ht == "FLAT":
+        if ht == "FLAT" and not self.allow_trading_when_higher_tf_flat:
             return {"signal_ready": False, "side_ready": None, "reason": "higher_tf_flat"}
         qv = float(ind.get("quote_volume_usdt", 0))
         if self.min_quote_vol > 0 and qv < self.min_quote_vol:
@@ -331,7 +343,7 @@ class EMAScalpSignalEngine:
         )
 
         if long_setup:
-            if ht != "UP":
+            if not self._ht_allows_long(ht):
                 return {"signal_ready": False, "side_ready": None, "reason": "against_higher_tf"}
             if self.macd_enabled:
                 if not (macd > macd_signal and macd_hist > 0):
@@ -348,7 +360,7 @@ class EMAScalpSignalEngine:
             return {"signal_ready": True, "side_ready": "LONG", "reason": "long_setup"}
 
         if short_setup:
-            if ht != "DOWN":
+            if not self._ht_allows_short(ht):
                 return {"signal_ready": False, "side_ready": None, "reason": "against_higher_tf"}
             if self.macd_enabled:
                 if not (macd < macd_signal and macd_hist < 0):
