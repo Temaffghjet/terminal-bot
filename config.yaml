@@ -47,6 +47,21 @@ ema_scalper:
   timeframe: 5m
 
   entry:
+    # Отключить скрытые дефолты которые блокируют входы:
+    min_volume_percentile: 0
+    higher_tf_min_volume_ratio: 0.0
+    volume_percentile_lookback: 0
+
+    # Убедиться что эти выключены:
+    adx_filter_enabled: false
+    macd_filter_enabled: false
+    ob_filter_enabled: false
+    ote_filter_enabled: false
+    anti_flat_enabled: false
+    entry_max_distance_from_ema_pct: 0.0
+    vwap_max_distance_pct: 0.0
+    no_trade_hours_utc: []
+
     ema_period: 9
     volume_lookback: 10
     volume_multiplier: 1.5
@@ -64,14 +79,6 @@ ema_scalper:
     trade_sessions_utc:
       - [7, 11]
       - [13, 20]
-    adx_filter_enabled: false
-    macd_filter_enabled: false
-    ob_filter_enabled: false
-    ote_filter_enabled: false
-    anti_flat_enabled: false
-    entry_max_distance_from_ema_pct: 0.0
-    vwap_max_distance_pct: 0.0
-    no_trade_hours_utc: []
 
   exit:
     take_profit_pct: 1.2
