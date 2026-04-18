@@ -46,22 +46,19 @@ function botStatusLabel(
   status: string | undefined,
 ): { text: string; className: string } {
   if (!isConnected) {
-    return { text: "Нет связи с ботом", className: "border-cp-line bg-cp-panel2 text-cp-muted" };
+    return { text: "Offline", className: "bg-ex-surface2 text-ex-muted border border-ex-border" };
   }
   const s = (status ?? "").toLowerCase();
   if (s === "running") {
-    return {
-      text: "Бот работает",
-      className: "border-cp-green/50 bg-cp-green/10 text-cp-green shadow-[0_0_12px_rgba(57,255,20,0.25)]",
-    };
+    return { text: "Running", className: "bg-ex-up/15 text-ex-up border border-ex-up/30" };
   }
   if (s === "paused") {
-    return { text: "Пауза", className: "border-cp-amber/60 bg-cp-amber/10 text-cp-amber" };
+    return { text: "Paused", className: "bg-ex-warn/10 text-ex-warn border border-ex-warn/25" };
   }
   if (s === "stopped") {
-    return { text: "Остановлен", className: "border-cp-line bg-cp-panel2 text-cp-muted" };
+    return { text: "Stopped", className: "bg-ex-surface2 text-ex-muted border border-ex-border" };
   }
-  return { text: status || "—", className: "border-cp-line bg-cp-panel text-slate-300" };
+  return { text: status || "—", className: "bg-ex-surface2 text-ex-text border border-ex-border" };
 }
 
 export default function App() {
@@ -166,38 +163,38 @@ export default function App() {
   const isLocalWs = /localhost|127\.0\.0\.1/i.test(wsUrl);
 
   return (
-    <div className="min-h-screen flex flex-col bg-cp-bg bg-cp-grid bg-[length:24px_24px] text-slate-200">
+    <div className="min-h-screen flex flex-col bg-ex-bg">
       {!isConnected ? (
-        <div className="border-b border-cp-amber/40 bg-cp-amber/5 px-4 py-2 text-[11px] text-cp-amber leading-snug shadow-[inset_0_-1px_0_rgba(255,184,0,0.2)]">
-          <strong className="font-semibold text-cp-yellow">WS offline.</strong> Подключение к{" "}
-          <code className="rounded-sm border border-cp-line bg-cp-panel px-1 text-cp-cyan">{wsUrl}</code>
+        <div className="border-b border-ex-warn/30 bg-ex-warn/5 px-4 py-2.5 text-[12px] text-ex-warn leading-relaxed">
+          <span className="font-semibold">Нет подключения к боту.</span>{" "}
+          <span className="text-ex-muted">WS:</span>{" "}
+          <code className="ex-num rounded bg-ex-surface px-1 py-0.5 text-ex-text border border-ex-border">{wsUrl}</code>
           {isLocalWs ? (
             <>
-              . Запустите бота на этой машине (из корня проекта:{" "}
-              <code className="rounded-sm border border-cp-line bg-cp-panel px-1 text-cp-cyan">
-                python -m backend.main
-              </code>{" "}
-              или ваш systemd) и проверьте{" "}
-              <code className="rounded-sm border border-cp-line bg-cp-panel px-1 text-cp-cyan">WS_PORT=8765</code> в{" "}
-              <code className="rounded-sm border border-cp-line bg-cp-panel px-1 text-cp-cyan">.env</code> бота.
+              {" "}
+              Запустите бота и проверьте <code className="ex-num text-ex-text">WS_PORT</code> в{" "}
+              <code className="ex-num text-ex-text">.env</code>.
             </>
           ) : (
             <>
-              . Бот на другом сервере — в <code className="rounded-sm border border-cp-line bg-cp-panel px-1">frontend/.env</code>{" "}
-              задайте <code className="rounded-sm border border-cp-line bg-cp-panel px-1 text-cp-cyan">VITE_WS_URL=ws://IP:8765</code> и
-              перезапустите <code className="rounded-sm border border-cp-line bg-cp-panel px-1 text-cp-cyan">npm run dev</code>; на VPS откройте
-              порт 8765.
+              {" "}
+              В <code className="ex-num text-ex-text">frontend/.env</code> задайте{" "}
+              <code className="ex-num text-ex-text">VITE_WS_URL</code>.
             </>
           )}
         </div>
       ) : null}
 
-      <header className="border-b border-cp-line px-4 py-3 shrink-0 cp-panel">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex flex-wrap items-center gap-3">
-            <h1 className="text-sm font-bold tracking-[0.15em] uppercase text-cp-yellow cp-glow-text">EMA Scalper</h1>
+      {/* Верхняя панель — как у бирж: бренд + статус + метрики */}
+      <header className="shrink-0 border-b border-ex-border bg-ex-surface">
+        <div className="flex flex-wrap items-center justify-between gap-4 px-4 py-3">
+          <div className="flex flex-wrap items-center gap-4">
+            <div>
+              <div className="text-[15px] font-semibold tracking-tight text-ex-text">EMA Scalper</div>
+              <div className="text-[11px] text-ex-muted">Hyperliquid · 5m · симуляция / мониторинг</div>
+            </div>
             <span
-              className={`inline-flex items-center rounded-sm border px-2.5 py-1 text-xs font-medium ${statusUi.className}`}
+              className={`inline-flex items-center rounded px-2 py-0.5 text-[11px] font-medium ${statusUi.className}`}
             >
               {statusUi.text}
             </span>
@@ -206,7 +203,7 @@ export default function App() {
                 type="button"
                 disabled={!isConnected || !isRunning}
                 onClick={() => sendMessage({ action: "pause" })}
-                className="cp-btn-ghost"
+                className="ex-btn-secondary text-[12px]"
               >
                 Пауза
               </button>
@@ -214,100 +211,117 @@ export default function App() {
                 type="button"
                 disabled={!isConnected || isRunning}
                 onClick={() => sendMessage({ action: "resume" })}
-                className="cp-btn-primary"
+                className="ex-btn-primary text-[12px]"
               >
-                Работает
+                Старт
               </button>
             </div>
           </div>
-          <div className="flex flex-wrap gap-6 text-xs font-mono text-slate-300">
+          <div className="flex flex-wrap items-end gap-x-8 gap-y-2 text-[12px]">
             <div>
-              <span className="text-cp-muted">Маржа в открытых </span>
-              <span className="text-cp-amber font-medium">${openMargin.toFixed(2)}</span>
-              <span className="text-cp-muted"> USDT</span>
+              <div className="text-[11px] text-ex-muted mb-0.5">Маржа в позициях</div>
+              <div className="ex-num font-medium text-ex-text">
+                {openMargin.toFixed(2)} <span className="text-ex-muted font-sans font-normal">USDT</span>
+              </div>
             </div>
             <div>
-              <span className="text-cp-muted">Нереализ. P&amp;L </span>
-              <span className={openUnrealized >= 0 ? "text-cp-green" : "text-cp-magenta"}>
-                ${openUnrealized.toFixed(4)}
-              </span>
+              <div className="text-[11px] text-ex-muted mb-0.5">Нереализ. P&amp;L</div>
+              <div className={`ex-num font-medium ${openUnrealized >= 0 ? "ex-pnl-up" : "ex-pnl-down"}`}>
+                {openUnrealized >= 0 ? "+" : ""}
+                {openUnrealized.toFixed(4)} USDT
+              </div>
             </div>
-            <div className="text-slate-400">
-              WS:{" "}
-              {isConnected ? (
-                <span className="text-cp-cyan font-medium">online</span>
-              ) : (
-                <span className="text-cp-magenta font-medium">offline</span>
-              )}
+            <div>
+              <div className="text-[11px] text-ex-muted mb-0.5">Связь</div>
+              <div className={`ex-num font-medium ${isConnected ? "text-ex-up" : "ex-pnl-down"}`}>
+                {isConnected ? "Live" : "—"}
+              </div>
             </div>
           </div>
         </div>
       </header>
 
-      <section className="border-b border-cp-line px-4 py-2 shrink-0 cp-panel">
-        <div className="text-xs font-mono flex flex-wrap gap-6">
-          <span className="cp-hud-title">PnL за день (UTC)</span>
+      {/* Сводка дня — отдельная полоса */}
+      <div className="shrink-0 border-b border-ex-border bg-ex-surface2 px-4 py-2.5">
+        <div className="flex flex-wrap items-center gap-8 text-[12px]">
+          <span className="text-ex-muted text-[11px] uppercase tracking-wide">Сегодня (UTC)</span>
           <span>
-            Сегодня:{" "}
-            <span className={todayPnl >= 0 ? "text-cp-green" : "text-cp-magenta"}>${todayPnl.toFixed(4)}</span>
+            <span className="text-ex-muted">PnL </span>
+            <span className={`ex-num font-semibold ${todayPnl >= 0 ? "ex-pnl-up" : "ex-pnl-down"}`}>
+              {todayPnl >= 0 ? "+" : ""}
+              {todayPnl.toFixed(4)} USDT
+            </span>
           </span>
-          <span className="text-cp-muted">Сделок сегодня: {todayTrades}</span>
+          <span className="text-ex-muted">
+            Сделок: <span className="ex-num text-ex-text">{todayTrades}</span>
+          </span>
         </div>
-      </section>
+      </div>
 
-      <section className="border-b border-cp-line shrink-0 cp-panel">
-        <div className="px-3 py-1.5 cp-hud-title border-b border-cp-line bg-cp-panel2/80">Поиск входа (реальное время)</div>
-        <div className="overflow-auto max-h-[160px]">
+      {/* Таблица сигналов */}
+      <section className="shrink-0 ex-panel border-b border-ex-border">
+        <div className="ex-section-title flex items-center justify-between">
+          <span>Сигналы входа</span>
+          <span className="normal-case font-normal text-ex-dim">обновление по WS</span>
+        </div>
+        <div className="overflow-auto max-h-[200px]">
           {!entryWatchRows.length ? (
-            <p className="p-2 text-xs text-cp-muted">Нет индикаторов: бот прогревается или WS не передал данные.</p>
+            <p className="p-3 text-[12px] text-ex-muted">Нет данных индикаторов (прогрев или нет связи).</p>
           ) : (
-            <table className="w-full text-[11px] font-mono">
-              <thead className="sticky top-0 cp-table-head">
+            <table className="w-full text-[12px]">
+              <thead className="sticky top-0 ex-table-head">
                 <tr>
-                  <th className="p-1.5 text-left font-normal">Пара</th>
-                  <th className="p-1.5 text-left font-normal">Статус</th>
-                  <th className="p-1.5 text-left font-normal">Причина</th>
-                  <th className="p-1.5 text-right font-normal">Auto</th>
-                  <th className="p-1.5 text-right font-normal">Conf</th>
-                  <th className="p-1.5 text-center font-normal">OTE</th>
-                  <th className="p-1.5 text-center font-normal">OB</th>
-                  <th className="p-1.5 text-right font-normal">Цена / EMA</th>
+                  <th className="px-3 py-2 text-left font-medium">Рынок</th>
+                  <th className="px-3 py-2 text-left font-medium">Статус</th>
+                  <th className="px-3 py-2 text-left font-medium">Комментарий</th>
+                  <th className="px-3 py-2 text-right font-medium ex-num">Auto</th>
+                  <th className="px-3 py-2 text-right font-medium ex-num">Conf</th>
+                  <th className="px-3 py-2 text-center font-medium">OTE</th>
+                  <th className="px-3 py-2 text-center font-medium">OB</th>
+                  <th className="px-3 py-2 text-right font-medium ex-num">Цена / EMA</th>
                 </tr>
               </thead>
               <tbody>
                 {entryWatchRows.map((r) => (
-                  <tr key={r.symbol} className="border-b border-cp-border/80 hover:bg-cp-cyan/5">
-                    <td className="p-1.5 text-cp-cyan">{r.symbol}</td>
-                    <td className="p-1.5">
+                  <tr
+                    key={r.symbol}
+                    className="border-b border-ex-border/80 hover:bg-ex-raised/50 transition-colors"
+                  >
+                    <td className="px-3 py-2 font-medium text-ex-text">{r.symbol}</td>
+                    <td className="px-3 py-2">
                       {r.ready ? (
-                        <span className="text-cp-green font-medium cp-glow-text">READY {r.side}</span>
+                        <span className="text-ex-up font-medium">
+                          Готов {r.side === "LONG" ? "Long" : r.side === "SHORT" ? "Short" : r.side}
+                        </span>
                       ) : (
-                        <span className={r.allow ? "text-cp-amber" : "text-cp-muted"}>
-                          {r.allow ? "ожидание триггера" : "фильтр блокирует"}
+                        <span className={r.allow ? "text-ex-warn" : "text-ex-muted"}>
+                          {r.allow ? "Ожидание" : "Фильтр"}
                         </span>
                       )}
                     </td>
-                    <td className="p-1.5 text-slate-400 max-w-[200px] truncate" title={r.reason}>
+                    <td className="px-3 py-2 text-ex-muted max-w-[min(280px,40vw)] truncate" title={r.reason}>
                       {r.reason}
                     </td>
-                    <td className="p-1.5 text-right text-slate-300">{Number.isFinite(r.score) ? r.score.toFixed(1) : "0.0"}</td>
-                    <td className="p-1.5 text-right text-slate-300">{r.conf !== null ? r.conf.toFixed(0) : "—"}</td>
-                    <td className="p-1.5 text-center text-[10px]">
+                    <td className="px-3 py-2 text-right ex-num text-ex-text">
+                      {Number.isFinite(r.score) ? r.score.toFixed(1) : "0.0"}
+                    </td>
+                    <td className="px-3 py-2 text-right ex-num text-ex-text">{r.conf !== null ? r.conf.toFixed(0) : "—"}</td>
+                    <td className="px-3 py-2 text-center text-[11px] ex-num">
                       {r.oteL || r.oteS ? (
                         <>
-                          {r.oteL ? <span className="text-cp-green">L</span> : null}
-                          {r.oteS ? <span className="text-cp-magenta ml-0.5">S</span> : null}
+                          {r.oteL ? <span className="text-ex-up">L</span> : null}
+                          {r.oteS ? <span className="text-ex-down ml-0.5">S</span> : null}
                         </>
                       ) : (
-                        <span className="text-cp-dim">—</span>
+                        "—"
                       )}
                     </td>
-                    <td className="p-1.5 text-center text-[10px]">
-                      {r.obB ? <span className="text-cp-cyan">↑</span> : null}
-                      {r.obBe ? <span className="text-cp-magenta">↓</span> : null}
-                      {!r.obB && !r.obBe ? <span className="text-cp-dim">—</span> : null}
+                    <td className="px-3 py-2 text-center text-[11px]">
+                      {r.obB ? <span className="text-ex-up">↑</span> : null}
+                      {r.obBe ? <span className="text-ex-down">↓</span> : null}
+                      {!r.obB && !r.obBe ? <span className="text-ex-dim">—</span> : null}
                     </td>
-                    <td className="p-1.5 text-right text-slate-400">
+                    <td className="px-3 py-2 text-right ex-num text-ex-muted">
                       {r.close.toFixed(3)} / {r.emaNow.toFixed(3)}
                     </td>
                   </tr>
@@ -318,43 +332,52 @@ export default function App() {
         </div>
       </section>
 
-      <section className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-2 gap-0 border-b border-cp-line">
-        <div className="border-b lg:border-b-0 lg:border-r border-cp-line flex flex-col min-h-[220px] max-h-[42vh]">
-          <div className="px-3 py-1.5 cp-hud-title border-b border-cp-line shrink-0 bg-cp-panel2/80">Открытые позиции</div>
-          <div className="overflow-auto flex-1 p-2 space-y-2">
+      <section className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-2 border-b border-ex-border">
+        <div className="flex flex-col min-h-[200px] max-h-[44vh] border-b lg:border-b-0 lg:border-r border-ex-border">
+          <div className="ex-section-title">Открытые позиции</div>
+          <div className="overflow-auto flex-1 p-3 space-y-2 bg-ex-bg">
             {!positions.length ? (
-              <p className="text-cp-muted text-xs p-2">Нет открытых EMA-позиций</p>
+              <p className="text-[12px] text-ex-muted py-2">Нет открытых позиций</p>
             ) : (
               positions.map((p, i) => (
                 <div
                   key={`${p.symbol}-${i}`}
-                  className="border border-cp-line rounded-sm cp-panel p-2 text-[11px] font-mono shadow-cp-glow"
+                  className="ex-panel rounded-sm p-3 text-[12px]"
                 >
-                  <div className="flex justify-between gap-2">
-                    <span className="text-cp-yellow font-medium">{String(p.symbol ?? "")}</span>
-                    <span className={p.side === "LONG" ? "text-cp-cyan" : "text-cp-magenta"}>{p.side}</span>
+                  <div className="flex justify-between items-start gap-2 mb-2">
+                    <span className="font-semibold text-ex-text">{String(p.symbol ?? "")}</span>
+                    <span
+                      className={`text-[11px] font-semibold px-1.5 py-0.5 rounded ${
+                        p.side === "LONG" ? "bg-ex-up/15 text-ex-up" : "bg-ex-down/15 text-ex-down"
+                      }`}
+                    >
+                      {p.side}
+                    </span>
                   </div>
-                  <div className="mt-1 grid grid-cols-2 gap-x-3 gap-y-0.5 text-slate-400">
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-ex-muted text-[11px]">
                     <span>Вход</span>
-                    <span className="text-right text-slate-200">{Number(p.entry_price ?? 0).toFixed(2)}</span>
-                    <span>Сейчас</span>
-                    <span className="text-right text-slate-200">{Number(p.current_price ?? 0).toFixed(2)}</span>
+                    <span className="ex-num text-right text-ex-text">{Number(p.entry_price ?? 0).toFixed(2)}</span>
+                    <span>Марк</span>
+                    <span className="ex-num text-right text-ex-text">{Number(p.current_price ?? 0).toFixed(2)}</span>
                     <span>Маржа</span>
-                    <span className="text-right text-cp-amber">${Number(p.size_usdt ?? 0).toFixed(2)}</span>
-                    <span>С плечом</span>
-                    <span className="text-right text-slate-300">
+                    <span className="ex-num text-right text-ex-warn">${Number(p.size_usdt ?? 0).toFixed(2)}</span>
+                    <span>Номинал × плечо</span>
+                    <span className="ex-num text-right text-ex-text">
                       ${Number(p.notional_usdt ?? 0).toFixed(2)} ×{p.leverage ?? 1}
                     </span>
-                    <span>P&amp;L нер.</span>
+                    <span>P&amp;L (u)</span>
                     <span
-                      className={`text-right ${Number(p.pnl_usdt ?? 0) >= 0 ? "text-cp-green" : "text-cp-magenta"}`}
+                      className={`ex-num text-right font-medium ${
+                        Number(p.pnl_usdt ?? 0) >= 0 ? "ex-pnl-up" : "ex-pnl-down"
+                      }`}
                     >
+                      {Number(p.pnl_usdt ?? 0) >= 0 ? "+" : ""}
                       ${Number(p.pnl_usdt ?? 0).toFixed(4)}
                     </span>
                   </div>
                   {p.entry_reason ? (
-                    <div className="mt-1 text-[10px] text-cp-muted truncate" title={String(p.entry_reason)}>
-                      Вход: {String(p.entry_reason)}
+                    <div className="mt-2 pt-2 border-t border-ex-border text-[10px] text-ex-dim truncate" title={String(p.entry_reason)}>
+                      {String(p.entry_reason)}
                     </div>
                   ) : null}
                 </div>
@@ -363,30 +386,30 @@ export default function App() {
           </div>
         </div>
 
-        <div className="flex flex-col min-h-[220px] max-h-[42vh]">
-          <div className="px-3 py-1.5 cp-hud-title border-b border-cp-line shrink-0 bg-cp-panel2/80">
-            Зафиксировано {closedToday.length ? `(сегодня UTC ${todayUtc})` : "(последние в ленте)"}
+        <div className="flex flex-col min-h-[200px] max-h-[44vh]">
+          <div className="ex-section-title">
+            История закрытий {closedToday.length ? `· UTC ${todayUtc}` : "· лента"}
           </div>
-          <div className="overflow-auto flex-1 p-2 space-y-2">
+          <div className="overflow-auto flex-1 p-3 space-y-2 bg-ex-bg">
             {!fixedList.length ? (
-              <p className="text-cp-muted text-xs p-2">Нет закрытых сделок в выборке</p>
+              <p className="text-[12px] text-ex-muted py-2">Нет записей</p>
             ) : (
               fixedList.map((t) => {
                 const { d, t: tm } = fmtDt(t.timestamp_close);
                 const pnl = Number(t.pnl_usdt ?? 0);
                 return (
-                  <div
-                    key={String(t.id)}
-                    className="border border-cp-line rounded-sm cp-panel p-2 text-[11px] font-mono"
-                  >
-                    <div className="flex justify-between">
-                      <span className="text-slate-200">{String(t.symbol ?? "")}</span>
-                      <span className={pnl >= 0 ? "text-cp-green" : "text-cp-magenta"}>${pnl.toFixed(4)}</span>
+                  <div key={String(t.id)} className="ex-panel rounded-sm p-3 text-[12px]">
+                    <div className="flex justify-between items-center">
+                      <span className="font-medium text-ex-text">{String(t.symbol ?? "")}</span>
+                      <span className={`ex-num font-semibold ${pnl >= 0 ? "ex-pnl-up" : "ex-pnl-down"}`}>
+                        {pnl >= 0 ? "+" : ""}
+                        {pnl.toFixed(4)}
+                      </span>
                     </div>
-                    <div className="text-[10px] text-cp-muted mt-0.5">
+                    <div className="text-[11px] text-ex-muted mt-1 ex-num">
                       {d} {tm}
                     </div>
-                    <div className="mt-1 text-[10px] text-cp-muted">
+                    <div className="text-[11px] text-ex-dim mt-1">
                       {String(t.close_reason ?? "")} · маржа ${Number(t.size_usdt ?? 0).toFixed(2)}
                     </div>
                   </div>
@@ -397,49 +420,41 @@ export default function App() {
         </div>
       </section>
 
-      <section className="flex flex-col min-h-[280px] flex-1 border-t border-cp-line">
-        <div className="flex flex-wrap items-center gap-2 px-3 py-1.5 border-b border-cp-line shrink-0 cp-panel">
-          <span className="cp-hud-title">История сделок</span>
+      <section className="flex flex-col min-h-[260px] flex-1">
+        <div className="flex flex-wrap items-center gap-2 px-3 py-2 border-b border-ex-border bg-ex-surface2">
+          <span className="text-[11px] font-medium uppercase tracking-wide text-ex-muted">Все сделки</span>
           <input
             type="date"
-            className="bg-cp-panel2 border border-cp-line rounded-sm px-1 py-0.5 text-[11px] text-slate-200 focus:border-cp-cyan focus:outline-none"
+            className="rounded border border-ex-border bg-ex-surface px-2 py-1 text-[12px] text-ex-text ex-num focus:border-ex-line focus:outline-none"
             value={dayPick}
             onChange={(e) => setDayPick(e.target.value)}
           />
-          <button
-            type="button"
-            className="text-[11px] px-2 py-0.5 rounded-sm border border-cp-yellow/70 bg-cp-yellow/10 text-cp-yellow hover:bg-cp-yellow/20"
-            onClick={loadDayHistory}
-          >
-            Загрузить день из БД
+          <button type="button" className="ex-btn-primary text-[12px] py-1" onClick={loadDayHistory}>
+            Загрузить день
           </button>
           {historyMode === "day" ? (
-            <button
-              type="button"
-              className="text-[11px] px-2 py-0.5 rounded-sm border border-cp-line bg-cp-panel2 text-slate-300 hover:border-cp-cyan/40"
-              onClick={backToFeedHistory}
-            >
-              Лента с сервера
+            <button type="button" className="ex-btn-secondary text-[12px] py-1" onClick={backToFeedHistory}>
+              Лента WS
             </button>
           ) : null}
           {historyMode === "day" && emaTradeByDay?.error ? (
-            <span className="text-cp-magenta text-[11px]">{emaTradeByDay.error}</span>
+            <span className="text-[12px] text-ex-down">{emaTradeByDay.error}</span>
           ) : null}
         </div>
-        <div className="overflow-auto flex-1 bg-cp-bg">
-          <table className="w-full text-left text-[11px] font-mono border-collapse">
-            <thead className="sticky top-0 cp-table-head">
+        <div className="overflow-auto flex-1 bg-ex-bg">
+          <table className="w-full text-left text-[12px] border-collapse">
+            <thead className="sticky top-0 ex-table-head z-10">
               <tr>
-                <th className="p-1.5 font-normal">Дата</th>
-                <th className="p-1.5 font-normal">Время UTC</th>
-                <th className="p-1.5 font-normal">Пара</th>
-                <th className="p-1.5 font-normal text-right">Вход</th>
-                <th className="p-1.5 font-normal text-right">Выход</th>
-                <th className="p-1.5 font-normal text-right">Маржа</th>
-                <th className="p-1.5 font-normal text-right">С плечом</th>
-                <th className="p-1.5 font-normal">Причина входа</th>
-                <th className="p-1.5 font-normal">Выход (reason)</th>
-                <th className="p-1.5 font-normal text-right">P&amp;L</th>
+                <th className="px-3 py-2 font-medium">Дата</th>
+                <th className="px-3 py-2 font-medium">Время</th>
+                <th className="px-3 py-2 font-medium">Рынок</th>
+                <th className="px-3 py-2 font-medium text-right ex-num">Вход</th>
+                <th className="px-3 py-2 font-medium text-right ex-num">Выход</th>
+                <th className="px-3 py-2 font-medium text-right ex-num">Маржа</th>
+                <th className="px-3 py-2 font-medium text-right ex-num">Номинал</th>
+                <th className="px-3 py-2 font-medium max-w-[120px]">Вход (reason)</th>
+                <th className="px-3 py-2 font-medium">Выход</th>
+                <th className="px-3 py-2 font-medium text-right ex-num">P&amp;L</th>
               </tr>
             </thead>
             <tbody>
@@ -449,21 +464,22 @@ export default function App() {
                 const n = notionWithLev(t);
                 const lev = Math.max(1, Number(t.leverage ?? 1));
                 return (
-                  <tr key={String(t.id)} className="border-b border-cp-border/60 hover:bg-cp-cyan/5">
-                    <td className="p-1.5 text-cp-muted">{d}</td>
-                    <td className="p-1.5 text-cp-muted">{tm}</td>
-                    <td className="p-1.5 text-cp-cyan">{String(t.symbol ?? "")}</td>
-                    <td className="p-1.5 text-right text-slate-300">{Number(t.entry_price ?? 0).toFixed(4)}</td>
-                    <td className="p-1.5 text-right text-slate-300">{Number(t.exit_price ?? 0).toFixed(4)}</td>
-                    <td className="p-1.5 text-right text-cp-amber">${Number(t.size_usdt ?? 0).toFixed(2)}</td>
-                    <td className="p-1.5 text-right text-slate-300">
-                      ${n.toFixed(2)} <span className="text-cp-muted">×{lev}</span>
+                  <tr key={String(t.id)} className="border-b border-ex-border hover:bg-ex-surface/80">
+                    <td className="px-3 py-2 text-ex-muted ex-num">{d}</td>
+                    <td className="px-3 py-2 text-ex-muted ex-num">{tm}</td>
+                    <td className="px-3 py-2 font-medium text-ex-text">{String(t.symbol ?? "")}</td>
+                    <td className="px-3 py-2 text-right ex-num text-ex-text">{Number(t.entry_price ?? 0).toFixed(4)}</td>
+                    <td className="px-3 py-2 text-right ex-num text-ex-text">{Number(t.exit_price ?? 0).toFixed(4)}</td>
+                    <td className="px-3 py-2 text-right ex-num text-ex-warn">${Number(t.size_usdt ?? 0).toFixed(2)}</td>
+                    <td className="px-3 py-2 text-right ex-num text-ex-text">
+                      ${n.toFixed(2)} <span className="text-ex-muted">×{lev}</span>
                     </td>
-                    <td className="p-1.5 text-slate-400 max-w-[140px] truncate" title={String(t.entry_reason ?? "")}>
+                    <td className="px-3 py-2 text-ex-muted max-w-[140px] truncate text-[11px]" title={String(t.entry_reason ?? "")}>
                       {String(t.entry_reason ?? "—")}
                     </td>
-                    <td className="p-1.5 text-slate-400">{String(t.close_reason ?? "—")}</td>
-                    <td className={`p-1.5 text-right ${pnl >= 0 ? "text-cp-green" : "text-cp-magenta"}`}>
+                    <td className="px-3 py-2 text-ex-muted text-[11px]">{String(t.close_reason ?? "—")}</td>
+                    <td className={`px-3 py-2 text-right ex-num font-medium ${pnl >= 0 ? "ex-pnl-up" : "ex-pnl-down"}`}>
+                      {pnl >= 0 ? "+" : ""}
                       {pnl.toFixed(4)}
                     </td>
                   </tr>
@@ -472,7 +488,7 @@ export default function App() {
             </tbody>
           </table>
           {!historyRows.length ? (
-            <p className="p-4 text-cp-muted text-xs">Нет строк. Подключите бота или загрузите день из БД.</p>
+            <p className="p-6 text-center text-[12px] text-ex-muted">Нет сделок. Подключите бота или загрузите день из БД.</p>
           ) : null}
         </div>
       </section>

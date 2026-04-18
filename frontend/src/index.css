@@ -3,73 +3,55 @@
 @tailwind utilities;
 
 @layer base {
-  :root {
-    --cp-yellow: #fcee0a;
-    --cp-cyan: #00e5ff;
-    --cp-bg: #050608;
-  }
-
   html {
     @apply antialiased;
   }
 
   body {
-    @apply min-h-screen bg-cp-void text-slate-200 font-mono text-[13px];
-    background-image: radial-gradient(ellipse 120% 80% at 50% -20%, rgba(0, 229, 255, 0.08), transparent 50%),
-      radial-gradient(ellipse 80% 50% at 100% 50%, rgba(252, 238, 10, 0.04), transparent 45%);
+    @apply min-h-screen bg-ex-bg text-ex-text font-sans text-[13px];
+    font-feature-settings: "tnum" 1;
   }
 
   #root {
-    @apply relative z-10 min-h-screen isolate;
-  }
-
-  /* Сканлайны под UI */
-  body::before {
-    content: "";
-    pointer-events: none;
-    position: fixed;
-    inset: 0;
-    z-index: 0;
-    opacity: 0.28;
-    background: repeating-linear-gradient(
-      0deg,
-      transparent,
-      transparent 2px,
-      rgba(0, 0, 0, 0.25) 2px,
-      rgba(0, 0, 0, 0.25) 3px
-    );
-    mix-blend-mode: multiply;
+    @apply relative min-h-screen;
   }
 }
 
 @layer components {
-  .cp-hud-title {
-    @apply text-[10px] uppercase tracking-[0.2em] text-cp-cyan font-semibold;
-    text-shadow: 0 0 12px rgba(0, 229, 255, 0.35);
+  .ex-panel {
+    @apply bg-ex-surface border border-ex-border;
+    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.03) inset;
   }
 
-  .cp-panel {
-    @apply border border-cp-border bg-cp-panel/95 shadow-cp-inset backdrop-blur-sm;
-    box-shadow: 0 0 0 1px rgba(0, 229, 255, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  .ex-section-title {
+    @apply px-3 py-2 text-[11px] font-medium uppercase tracking-wide text-ex-muted border-b border-ex-border bg-ex-surface2;
   }
 
-  .cp-btn {
-    @apply rounded-sm border px-3 py-1.5 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40;
+  .ex-table-head {
+    @apply bg-ex-raised text-ex-muted text-[11px] font-medium uppercase tracking-wide border-b border-ex-border;
   }
 
-  .cp-btn-ghost {
-    @apply cp-btn border-cp-line bg-cp-panel2 text-slate-200 hover:border-cp-cyan/50 hover:text-cp-cyan hover:shadow-cp-glow;
+  .ex-btn {
+    @apply inline-flex items-center justify-center rounded px-3 py-1.5 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40;
   }
 
-  .cp-btn-primary {
-    @apply cp-btn border-cp-yellow/80 bg-cp-yellow/10 text-cp-yellow hover:bg-cp-yellow/20 shadow-cp-yellow;
+  .ex-btn-secondary {
+    @apply ex-btn border border-ex-border bg-ex-surface2 text-ex-text hover:bg-ex-raised hover:border-ex-line;
   }
 
-  .cp-table-head {
-    @apply bg-cp-panel2 text-cp-muted text-[10px] uppercase tracking-wider border-b border-cp-line;
+  .ex-btn-primary {
+    @apply ex-btn bg-ex-up text-white hover:brightness-110;
   }
 
-  .cp-glow-text {
-    text-shadow: 0 0 8px currentColor;
+  .ex-num {
+    @apply font-mono tabular-nums;
+  }
+
+  .ex-pnl-up {
+    @apply text-ex-up;
+  }
+
+  .ex-pnl-down {
+    @apply text-ex-down;
   }
 }
