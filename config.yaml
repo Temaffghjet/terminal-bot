@@ -1,6 +1,5 @@
 # ═══════════════════════════════════════════════════
-# EMA Scalper: структура 15m, трейлинг; trade_sessions пустой = 24/7 UTC
-# ETH/BTC/SOL, Hyperliquid, 5m
+# EMA Scalper: HL 5m; min_volume_usdt=0 — без отсечения по quote volume на свече
 # ═══════════════════════════════════════════════════
 
 exchange:
@@ -49,25 +48,24 @@ ema_scalper:
   entry:
     ema_period: 9
     volume_lookback: 10
-    volume_multiplier: 1.5
-    min_candles_above_below: 3
+    volume_multiplier: 1.2
+    min_candles_above_below: 2
     max_candles_above_below: 8
     higher_tf: "15m"
     momentum_mode: loose
-    min_candle_body_pct: 0.05
-    min_volume_usdt: 500000
-    cooldown_candles: 3
+    min_candle_body_pct: 0.03
+    min_volume_usdt: 0
+    cooldown_candles: 2
     rsi_period: 14
-    rsi_long_max: 65
-    rsi_short_min: 35
+    rsi_long_max: 70
+    rsi_short_min: 30
     market_structure_enabled: true
     min_volume_percentile: 0
     higher_tf_min_volume_ratio: 0.0
     volume_percentile_lookback: 0
 
-    # Всё выключено:
     no_trade_hours_utc: []
-    trade_sessions_utc: []           # пусто = 24/7 UTC
+    trade_sessions_utc: []
     adx_filter_enabled: false
     macd_filter_enabled: false
     ob_filter_enabled: false
