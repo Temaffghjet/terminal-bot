@@ -70,11 +70,15 @@ class EMAScalpSignalEngine:
         return is_active_session(h, self.trade_sessions_utc)
 
     def _ht_allows_long(self, ht: Any) -> bool:
+        if self.market_structure_enabled:
+            return True
         if ht == "UP":
             return True
         return bool(self.allow_trading_when_higher_tf_flat and ht == "FLAT")
 
     def _ht_allows_short(self, ht: Any) -> bool:
+        if self.market_structure_enabled:
+            return True
         if ht == "DOWN":
             return True
         return bool(self.allow_trading_when_higher_tf_flat and ht == "FLAT")
@@ -151,7 +155,7 @@ class EMAScalpSignalEngine:
         ht = ind.get("higher_tf_trend")
         if ht is None:
             return {"action": "HOLD", "reason": "higher_tf_unavailable", "indicators": ind}
-        if ht == "FLAT" and not self.allow_trading_when_higher_tf_flat:
+        if ht == "FLAT" and not self.allow_trading_when_higher_tf_flat and not self.market_structure_enabled:
             return {"action": "HOLD", "reason": "higher_tf_flat", "indicators": ind}
         if open_count >= self.max_open:
             return {"action": "HOLD", "reason": "max_positions", "indicators": ind}
@@ -303,7 +307,7 @@ class EMAScalpSignalEngine:
         ht = ind.get("higher_tf_trend")
         if ht is None:
             return {"signal_ready": False, "side_ready": None, "reason": "higher_tf_unavailable"}
-        if ht == "FLAT" and not self.allow_trading_when_higher_tf_flat:
+        if ht == "FLAT" and not self.allow_trading_when_higher_tf_flat and not self.market_structure_enabled:
             return {"signal_ready": False, "side_ready": None, "reason": "higher_tf_flat"}
         if not self._trade_session_ok():
             return {"signal_ready": False, "side_ready": None, "reason": "outside_session"}
