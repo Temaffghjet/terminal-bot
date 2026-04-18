@@ -111,6 +111,10 @@ export default function App() {
           oteS: Boolean(ind.in_ote_short),
           obB: Boolean(ind.price_in_bullish_ob),
           obBe: Boolean(ind.price_in_bearish_ob),
+          structure:
+            ind["market_structure"] !== undefined && ind["market_structure"] !== null
+              ? String(ind["market_structure"])
+              : null,
         };
       });
   }, [indicators]);
@@ -274,6 +278,7 @@ export default function App() {
                   <th className="px-3 py-2 text-left font-medium">Рынок</th>
                   <th className="px-3 py-2 text-left font-medium">Статус</th>
                   <th className="px-3 py-2 text-left font-medium">Комментарий</th>
+                  <th className="px-3 py-2 text-center font-medium">Структ.</th>
                   <th className="px-3 py-2 text-right font-medium ex-num">Auto</th>
                   <th className="px-3 py-2 text-right font-medium ex-num">Conf</th>
                   <th className="px-3 py-2 text-center font-medium">OTE</th>
@@ -301,6 +306,9 @@ export default function App() {
                     </td>
                     <td className="px-3 py-2 text-ex-muted max-w-[min(280px,40vw)] truncate" title={r.reason}>
                       {r.reason}
+                    </td>
+                    <td className="px-3 py-2 text-center text-[11px] font-medium text-ex-text">
+                      {r.structure ?? "—"}
                     </td>
                     <td className="px-3 py-2 text-right ex-num text-ex-text">
                       {Number.isFinite(r.score) ? r.score.toFixed(1) : "0.0"}

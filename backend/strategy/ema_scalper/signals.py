@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from backend.strategy.ema_scalper.indicators import is_active_session
 from backend.strategy.ema_scalper.position import EMAScalpPosition
 
 ALLOWED_SYMBOLS = {
@@ -56,6 +57,17 @@ class EMAScalpSignalEngine:
         self.min_confidence_score = float(ent.get("min_confidence_score", 60))
         # Если true: при higher_tf_trend == FLAT всё равно смотреть только 5m-сетап (лонг/шорт по своим правилам)
         self.allow_trading_when_higher_tf_flat = bool(ent.get("allow_trading_when_higher_tf_flat", False))
+        self.market_structure_enabled = bool(ent.get("market_structure_enabled", False))
+        self.trade_sessions_utc: list[Any] = list(ent.get("trade_sessions_utc") or [])
+        self.trailing_stop_enabled = bool(ex.get("trailing_stop_enabled", False))
+        self.trailing_activation_pct = float(ex.get("trailing_activation_pct", 0.3))
+        self.trailing_distance_pct = float(ex.get("trailing_distance_pct", 0.2))
+
+    def _trade_session_ok(self) -> bool:
+        if not self.trade_sessions_utc:
+            return True
+        h = datetime.now(timezone.utc).hour
+        return is_active_session(h, self.trade_sessions_utc)
 
     def _ht_allows_long(self, ht: Any) -> bool:
         if ht == "UP":
@@ -145,6 +157,8 @@ class EMAScalpSignalEngine:
             return {"action": "HOLD", "reason": "max_positions", "indicators": ind}
         if not risk_ok:
             return {"action": "HOLD", "reason": "daily_loss_limit", "indicators": ind}
+        if not self._trade_session_ok():
+            return {"action": "HOLD", "reason": "outside_session", "indicators": ind}
         h = datetime.now(timezone.utc).hour
         if h in self.no_trade_hours:
             return {"action": "HOLD", "reason": "no_trade_hour", "indicators": ind}
@@ -160,6 +174,11 @@ class EMAScalpSignalEngine:
         if last_entry_ts_ms is not None:
             if current_bar_ts_ms - last_entry_ts_ms < self.cooldown_ms:
                 return {"action": "HOLD", "reason": "cooldown", "indicators": ind}
+
+        if self.market_structure_enabled:
+            ms = str(ind.get("market_structure", "RANGING"))
+            if ms == "RANGING":
+                return {"action": "HOLD", "reason": "ranging_market", "indicators": ind}
 
         ema = float(ind["ema_current"])
         close = float(ind["close"])
@@ -213,6 +232,8 @@ class EMAScalpSignalEngine:
                 return {"action": "HOLD", "reason": "rsi_overbought", "indicators": ind}
             if body_pct < self.min_candle_body_pct:
                 return {"action": "HOLD", "reason": "doji_candle", "indicators": ind}
+            if self.market_structure_enabled and ind.get("market_structure") != "BULLISH":
+                return {"action": "HOLD", "reason": "structure_bearish", "indicators": ind}
             ok_c, reason_c = self._confluence_eval("LONG", ind)
             if not ok_c:
                 return {"action": "HOLD", "reason": reason_c, "indicators": ind}
@@ -230,6 +251,8 @@ class EMAScalpSignalEngine:
                 return {"action": "HOLD", "reason": "rsi_oversold", "indicators": ind}
             if body_pct < self.min_candle_body_pct:
                 return {"action": "HOLD", "reason": "doji_candle", "indicators": ind}
+            if self.market_structure_enabled and ind.get("market_structure") != "BEARISH":
+                return {"action": "HOLD", "reason": "structure_bullish", "indicators": ind}
             ok_c, reason_c = self._confluence_eval("SHORT", ind)
             if not ok_c:
                 return {"action": "HOLD", "reason": reason_c, "indicators": ind}
@@ -243,6 +266,8 @@ class EMAScalpSignalEngine:
         if ind.get("warming_up"):
             return {"should_exit": False, "reason": None, "pnl_pct": 0.0}
         px = float(pos.current_price)
+        if self.trailing_stop_enabled:
+            pos.update_trailing_stop(px, self.trailing_activation_pct, self.trailing_distance_pct)
         if pos.side == "LONG":
             if px >= float(pos.tp_price):
                 return {"should_exit": True, "reason": "TP", "pnl_pct": pos.pnl_pct()}
@@ -280,6 +305,8 @@ class EMAScalpSignalEngine:
             return {"signal_ready": False, "side_ready": None, "reason": "higher_tf_unavailable"}
         if ht == "FLAT" and not self.allow_trading_when_higher_tf_flat:
             return {"signal_ready": False, "side_ready": None, "reason": "higher_tf_flat"}
+        if not self._trade_session_ok():
+            return {"signal_ready": False, "side_ready": None, "reason": "outside_session"}
         qv = float(ind.get("quote_volume_usdt", 0))
         if self.min_quote_vol > 0 and qv < self.min_quote_vol:
             return {"signal_ready": False, "side_ready": None, "reason": "low_liquidity"}
@@ -304,6 +331,10 @@ class EMAScalpSignalEngine:
         htf_vr = float(ind.get("higher_tf_volume_ratio", 0.0))
         if self.higher_tf_min_volume_ratio > 0 and htf_vr < self.higher_tf_min_volume_ratio:
             return {"signal_ready": False, "side_ready": None, "reason": "thin_higher_tf_volume"}
+        if self.market_structure_enabled:
+            ms = str(ind.get("market_structure", "RANGING"))
+            if ms == "RANGING":
+                return {"signal_ready": False, "side_ready": None, "reason": "ranging_market"}
         ema = float(ind["ema_current"])
         close = float(ind["close"])
         ae = int(ind["above_ema_count"])
@@ -354,6 +385,8 @@ class EMAScalpSignalEngine:
                 return {"signal_ready": False, "side_ready": None, "reason": "rsi_overbought"}
             if body_pct < self.min_candle_body_pct:
                 return {"signal_ready": False, "side_ready": None, "reason": "doji_candle"}
+            if self.market_structure_enabled and ind.get("market_structure") != "BULLISH":
+                return {"signal_ready": False, "side_ready": None, "reason": "structure_bearish"}
             ok_c, reason_c = self._confluence_eval("LONG", ind)
             if not ok_c:
                 return {"signal_ready": False, "side_ready": None, "reason": reason_c}
@@ -371,6 +404,8 @@ class EMAScalpSignalEngine:
                 return {"signal_ready": False, "side_ready": None, "reason": "rsi_oversold"}
             if body_pct < self.min_candle_body_pct:
                 return {"signal_ready": False, "side_ready": None, "reason": "doji_candle"}
+            if self.market_structure_enabled and ind.get("market_structure") != "BEARISH":
+                return {"signal_ready": False, "side_ready": None, "reason": "structure_bullish"}
             ok_c, reason_c = self._confluence_eval("SHORT", ind)
             if not ok_c:
                 return {"signal_ready": False, "side_ready": None, "reason": reason_c}

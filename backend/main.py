@@ -32,7 +32,13 @@ from backend.strategy.breakout import (
     BreakoutPositionTracker,
     BreakoutSignalEngine,
 )
-from backend.strategy.ema_scalper import EMAScalpPosition, EMAScalpSignalEngine, enrich_indicators_htf_ote_ob, get_indicators
+from backend.strategy.ema_scalper import (
+    EMAScalpPosition,
+    EMAScalpSignalEngine,
+    enrich_indicators_htf_ote_ob,
+    enrich_indicators_market_structure,
+    get_indicators,
+)
 from backend.strategy.ema_scalper.indicators import calc_ema, compute_higher_tf_trend_from_ohlcv
 from backend.strategy.micro_signals import MicroSignalEngine
 from backend.strategy.position_manager import LegState, PairPosition, PositionManager, ScalpPosition
@@ -1683,14 +1689,22 @@ async def ema_scalper_bot_loop() -> None:
                             ind["higher_tf_trend"] = (ht_detail or {}).get("trend")
                             ind["higher_tf_trend_detail"] = ht_detail
                             ind["higher_tf_volume_ratio"] = float((ht_detail or {}).get("volume_ratio") or 0.0)
-                            if bool(ent_cfg.get("ob_filter_enabled")) or bool(ent_cfg.get("ote_filter_enabled")):
+                            need_htf_candles = (
+                                bool(ent_cfg.get("ob_filter_enabled"))
+                                or bool(ent_cfg.get("ote_filter_enabled"))
+                                or bool(ent_cfg.get("market_structure_enabled"))
+                            )
+                            if need_htf_candles:
                                 ote_lb = int(ent_cfg.get("ote_swing_lookback", 20))
                                 ob_lb = int(ent_cfg.get("ob_lookback", 15))
                                 atr_p = int(ent_cfg.get("atr_period", 14))
-                                need_bars = max(ote_lb + 2, ob_lb + 5, atr_p + 5, 40)
+                                need_bars = max(ote_lb + 2, ob_lb + 5, atr_p + 5, 40, 8)
                                 htf_limit = max(80, need_bars)
                                 htf_candles = await _ema_htf_closed_candles_cached(ex, sym, htf_tf, limit=htf_limit, ttl_sec=60.0)
-                                enrich_indicators_htf_ote_ob(ind, htf_candles, ent_cfg)
+                                if bool(ent_cfg.get("ob_filter_enabled")) or bool(ent_cfg.get("ote_filter_enabled")):
+                                    enrich_indicators_htf_ote_ob(ind, htf_candles, ent_cfg)
+                                if bool(ent_cfg.get("market_structure_enabled")):
+                                    enrich_indicators_market_structure(ind, htf_candles, ent_cfg)
                         auto_profile = (
                             _ema_auto_trade_profile(ind, dep, rk_es, pair_exit_cfg, {**auto_cfg, "min_score_to_trade": dyn_min_score}, lev, pos_pct, dry_es)
                             if (auto_enabled and not ind.get("warming_up"))

@@ -509,3 +509,46 @@ def enrich_indicators_htf_ote_ob(
     ind["bearish_ob"] = ob.get("bearish_ob")
     ind["price_in_bullish_ob"] = bool(ob.get("price_in_bullish_ob"))
     ind["price_in_bearish_ob"] = bool(ob.get("price_in_bearish_ob"))
+
+
+def get_market_structure(candles_htf: list[dict[str, Any]]) -> str:
+    """
+    Структура по последним 6 свечам старшего ТФ (3 пары high/low).
+    BULLISH: HH и HL; BEARISH: LH и LL; иначе RANGING.
+    """
+    if len(candles_htf) < 6:
+        return "RANGING"
+    last = candles_htf[-6:]
+    highs = [float(c["high"]) for c in last]
+    lows = [float(c["low"]) for c in last]
+    hh = highs[-1] > highs[-3] > highs[-5]
+    hl = lows[-1] > lows[-3] > lows[-5]
+    lh = highs[-1] < highs[-3] < highs[-5]
+    ll = lows[-1] < lows[-3] < lows[-5]
+    if hh and hl:
+        return "BULLISH"
+    if lh and ll:
+        return "BEARISH"
+    return "RANGING"
+
+
+def is_active_session(hour_utc: int, sessions: list[Any]) -> bool:
+    """sessions: [[start, end], ...], полуинтервал [start, end) в часах UTC."""
+    for seg in sessions:
+        if not isinstance(seg, (list, tuple)) or len(seg) < 2:
+            continue
+        start, end = int(seg[0]), int(seg[1])
+        if start <= hour_utc < end:
+            return True
+    return False
+
+
+def enrich_indicators_market_structure(
+    ind: dict[str, Any],
+    candles_htf: list[dict[str, Any]] | None,
+    entry_cfg: dict[str, Any],
+) -> None:
+    """ind.market_structure: BULLISH | BEARISH | RANGING по закрытым свечам higher_tf."""
+    if not entry_cfg.get("market_structure_enabled"):
+        return
+    ind["market_structure"] = get_market_structure(list(candles_htf or []))

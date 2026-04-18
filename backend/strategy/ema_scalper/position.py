@@ -29,6 +29,7 @@ class EMAScalpPosition:
     status: str = "OPEN"
     close_reason: str | None = None
     exit_price: float | None = None
+    trailing_active: bool = False
 
     def __post_init__(self) -> None:
         if self.current_price <= 0:
@@ -53,6 +54,30 @@ class EMAScalpPosition:
 
     def update(self, price: float) -> None:
         self.current_price = price
+
+    def update_trailing_stop(self, current_price: float, activation_pct: float, distance_pct: float) -> None:
+        """
+        После прибыли > activation_pct двигает SL за ценой на distance_pct (только в сторону фиксации).
+        activation_pct / distance_pct — в процентах (например 0.3 и 0.2).
+        """
+        if activation_pct <= 0 or distance_pct <= 0:
+            return
+        ep = float(self.entry_price)
+        if ep <= 0:
+            return
+        px = float(current_price)
+        if self.side == "LONG":
+            if px > ep * (1.0 + activation_pct / 100.0):
+                new_sl = px * (1.0 - distance_pct / 100.0)
+                if new_sl > float(self.sl_price):
+                    self.sl_price = new_sl
+                    self.trailing_active = True
+        elif self.side == "SHORT":
+            if px < ep * (1.0 - activation_pct / 100.0):
+                new_sl = px * (1.0 + distance_pct / 100.0)
+                if new_sl < float(self.sl_price):
+                    self.sl_price = new_sl
+                    self.trailing_active = True
 
     def to_dict(self, current_bar_ts_ms: int | None = None) -> dict:
         tp_dist = abs(self.tp_price - self.entry_price)
@@ -86,4 +111,5 @@ class EMAScalpPosition:
             "progress_to_tp": round(prog, 1),
             "status": self.status,
             "entry_reason": self.entry_reason or "",
+            "trailing_active": self.trailing_active,
         }
