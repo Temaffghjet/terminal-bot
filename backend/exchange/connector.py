@@ -36,6 +36,8 @@ def create_exchange(config: dict, env: dict) -> ccxt.Exchange:
                 "options": {"defaultType": "swap"},
             }
         )
+        exchange.enableRateLimit = True
+        exchange.rateLimit = 150
         if testnet:
             exchange.set_sandbox_mode(True)
     else:

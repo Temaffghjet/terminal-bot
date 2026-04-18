@@ -1665,7 +1665,7 @@ async def ema_scalper_bot_loop() -> None:
                         break
                     sym = pr["symbol"]
                     pos_key = ema_pos_key(profile_id, sym)
-                    await asyncio.sleep(0.12)
+                    await asyncio.sleep(0.75)
                     try:
                         pair_exit_cfg = {**ex_cfg, **(pr.get("exit") or {})}
                         pair_tp_pct = float(pair_exit_cfg.get("take_profit_pct", 1.5))
@@ -1719,8 +1719,8 @@ async def ema_scalper_bot_loop() -> None:
                         off = len(candles) - len(slice_c)
                         RT.ema_chart_history[pos_key] = [{"ts": c["ts"], "open": c["open"], "high": c["high"], "low": c["low"], "close": c["close"], "volume": c["volume"], "ema": float(ema_series[off + j] if off + j < len(ema_series) else (ema_series[-1] if ema_series else c["close"]))} for j, c in enumerate(slice_c)]
                         RT.ema_indicators[pos_key] = ({**{k: v for k, v in ind.items() if k != "warming_up"}, **eng.preview_panel_status(ind)} if not ind.get("warming_up") else {})
-                        ticker = await asyncio.wait_for(asyncio.to_thread(ex.fetch_ticker, sym), timeout=35.0)
-                        last = float(ticker["last"] or ticker["close"] or candles[-1]["close"])
+                        # Без fetch_ticker: в ccxt HL он тянет fetch_markets -> лавина POST /info -> 429
+                        last = float(candles[-1]["close"])
                         if pos_key in RT.ema_positions:
                             pos = RT.ema_positions[pos_key]
                             pos.update(last)
@@ -2126,6 +2126,13 @@ async def main_async() -> None:
         )
         RT.orders_ema = OrderManager(RT.ema_scalper_exchange, RT.config)
         RT.ema_scalper_engine = EMAScalpSignalEngine(RT.config)
+        exn = str(es0.get("exchange", "binance") or "").lower()
+        if exn == "hyperliquid":
+            try:
+                await asyncio.to_thread(RT.ema_scalper_exchange.load_markets, False)
+                logger.info("Hyperliquid (EMA): load_markets() — кэш рынков, меньше 429")
+            except Exception as e:  # noqa: BLE001
+                logger.warning("Hyperliquid (EMA) load_markets: %s", e)
 
     strat0 = RT.config.get("strategy") or {}
     enabled = [p for p in (RT.config.get("pairs") or []) if p.get("enabled")]
