@@ -113,8 +113,8 @@ def get_recent_trades(conn: sqlite3.Connection, limit: int = 50) -> list[dict[st
 def get_pnl_today(conn: sqlite3.Connection) -> float:
     day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     cur = conn.execute(
-        "SELECT COALESCE(SUM(pnl_usdt), 0) FROM scalp_trades WHERE timestamp_close LIKE ?",
-        (day + "%",),
+        "SELECT COALESCE(SUM(pnl_usdt), 0) FROM scalp_trades WHERE date(timestamp_close) = ?",
+        (day,),
     )
     row = cur.fetchone()
     return float(row[0] if row else 0)
@@ -139,9 +139,9 @@ def get_stats(conn: sqlite3.Connection) -> dict[str, Any]:
                SUM(CASE WHEN pnl_usdt > 0 THEN 1 ELSE 0 END),
                SUM(CASE WHEN pnl_usdt < 0 THEN 1 ELSE 0 END),
                COALESCE(SUM(fee_usdt), 0)
-        FROM scalp_trades WHERE timestamp_close LIKE ?
+        FROM scalp_trades WHERE date(timestamp_close) = ?
         """,
-        (day + "%",),
+        (day,),
     )
     row = cur.fetchone()
     td_n = int(row[0] or 0)
