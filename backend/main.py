@@ -114,7 +114,7 @@ def build_ws_payload() -> dict[str, Any]:
     dry = bool(es.get("dry_run", (RT.config.get("bot") or {}).get("dry_run", True)))
     stats = dbmod.get_stats(RT.conn) if RT.conn else {}
     pnl_today = float(stats.get("pnl_today", 0))
-    recent = dbmod.get_recent_trades(RT.conn, 50) if RT.conn else []
+    recent = dbmod.get_recent_trades(RT.conn, 500) if RT.conn else []
 
     return {
         "ts": datetime.now(timezone.utc).isoformat(),

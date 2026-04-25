@@ -94,6 +94,7 @@ function Trend1HCell({ trend }: { trend: string }) {
 export default function App() {
   const [data, setData] = useState<Payload | null>(null);
   const [wsOk, setWsOk] = useState(false);
+  const [selectedDate, setSelectedDate] = useState<string>("ALL");
 
   useEffect(() => {
     let ws: WebSocket | null = null;
@@ -137,6 +138,39 @@ export default function App() {
 
   const es = data?.ema_scalper;
   const stats = es?.stats || {};
+  const tradeRows = (es?.recent_trades || []) as Record<string, unknown>[];
+  const tradeDates = useMemo(() => {
+    const uniq = new Set<string>();
+    for (const t of tradeRows) {
+      const ts = String(t.timestamp_close || "");
+      if (ts.length >= 10) uniq.add(ts.slice(0, 10));
+    }
+    return Array.from(uniq).sort((a, b) => b.localeCompare(a));
+  }, [tradeRows]);
+  const filteredTrades = useMemo(() => {
+    if (selectedDate === "ALL") return tradeRows;
+    if (selectedDate === "WEEK") {
+      const now = new Date();
+      const from = new Date(
+        Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 6)
+      );
+      return tradeRows.filter((t) => {
+        const ts = String(t.timestamp_close || "");
+        if (ts.length < 10) return false;
+        const d = new Date(`${ts.slice(0, 10)}T00:00:00Z`);
+        return d >= from;
+      });
+    }
+    return tradeRows.filter((t) =>
+      String(t.timestamp_close || "").startsWith(selectedDate)
+    );
+  }, [tradeRows, selectedDate]);
+
+  useEffect(() => {
+    if (!tradeDates.length || selectedDate === "ALL" || selectedDate === "WEEK") {
+      return;
+    }
+  }, [tradeDates, selectedDate]);
 
   return (
     <div className="min-h-screen font-sans text-sm">
@@ -341,9 +375,41 @@ export default function App() {
       </div>
 
       <section className="mx-4 mb-8 rounded border border-okx-border bg-okx-card p-4">
-        <h2 className="mb-3 font-mono text-xs uppercase text-okx-muted">
-          История сделок
-        </h2>
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <h2 className="font-mono text-xs uppercase text-okx-muted">
+            История сделок
+          </h2>
+          <label className="flex items-center gap-2 font-mono text-[11px] text-okx-muted">
+            Дата:
+            <select
+              value={selectedDate}
+              onChange={(e) => setSelectedDate(e.target.value)}
+              className="rounded border border-okx-border bg-okx-bg px-2 py-1 text-okx-text"
+            >
+              <option value="ALL">Все даты</option>
+              <option value="WEEK">Последние 7 дней</option>
+              {tradeDates.map((d) => (
+                <option key={d} value={d}>
+                  {d}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="flex items-center gap-2 font-mono text-[11px] text-okx-muted">
+            Выбрать:
+            <input
+              type="date"
+              value={selectedDate === "ALL" || selectedDate === "WEEK" ? "" : selectedDate}
+              onChange={(e) =>
+                setSelectedDate(e.target.value ? e.target.value : "ALL")
+              }
+              className="rounded border border-okx-border bg-okx-bg px-2 py-1 text-okx-text"
+            />
+          </label>
+        </div>
+        <p className="mb-2 font-mono text-[10px] text-okx-muted">
+          Показано сделок: {filteredTrades.length}
+        </p>
         <div className="overflow-x-auto">
           <table className="w-full border-collapse font-mono text-[11px]">
             <thead>
@@ -360,7 +426,7 @@ export default function App() {
               </tr>
             </thead>
             <tbody>
-              {(es?.recent_trades || []).map((t) => {
+              {filteredTrades.map((t) => {
                 const tr = t as Record<string, unknown>;
                 return (
                   <tr key={String(tr.id)} className="border-b border-okx-border/50">
